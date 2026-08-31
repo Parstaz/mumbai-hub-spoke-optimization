@@ -5,3 +5,4 @@ data/cache/
 results/
 .env
 .DS_Store
+data/*.json
