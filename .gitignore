@@ -6,3 +6,6 @@ results/
 .env
 .DS_Store
 data/*.json
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/

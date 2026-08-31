@@ -175,7 +175,7 @@ make test      # ruff + mypy + pytest
 ## 5. Version control
 
 - Conventional Commits: `feat(stage2): add adaptive time-window penalty`.
-  Scopes: `config`, `data`, `costs`, `stage1`, `stage2`, `baseline`, `eval`, `docs`, `ci`.
+  Scopes: `config`, `data`, `costs`, `stage1`, `stage2`, `solution`, `baseline`, `eval`, `docs`, `ci`.
 - One logical change per commit. Formatting-only changes are committed separately.
 - Imperative mood, lower case, no trailing period.
 
@@ -197,7 +197,7 @@ A step is complete only when all of the following hold:
 
 ## 7. Build status
 
-- [ ] 1 — config, synthetic data, `Solution` + `evaluate_solution()`
+- [x] 1 — config, synthetic data, `Solution` + `evaluate_solution()`
 - [ ] 2 — cost layer: chunked OSRM matrix, parquet cache, cumulative traffic bands
 - [ ] 3 — greedy baseline
 - [ ] 4 — Stage 1: hub assignment (nearest / min-cost-flow) + per-hub CVRP
