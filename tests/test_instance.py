@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from src.config import FleetConfig, ScheduleConfig
+from src.config import FleetConfig, GeoConfig, ScheduleConfig
 from src.data.instance import (
     FORMAT_VERSION,
     Coordinate,
@@ -26,6 +26,14 @@ from src.data.instance import (
 from src.exceptions import InstanceError
 from src.units import NodeId, Seconds
 from tests.conftest import TINY_GEO, build_instance
+
+TWO_HUB_GEO = GeoConfig(
+    n_hubs=2,
+    n_sources=1,
+    n_customers=2,
+    n_density_clusters=1,
+    hub_candidate_pool=10,
+)
 
 
 def test_node_layout_is_hubs_then_sources_then_customers(tiny_instance: Instance) -> None:
@@ -172,10 +180,18 @@ def test_instance_rejects_shipment_with_unknown_endpoints() -> None:
 
 
 def test_instance_accepts_a_shipment_exactly_at_vehicle_capacity() -> None:
-    """The capacity boundary is inclusive: a full-vehicle shipment is legal."""
+    """The capacity boundary is inclusive: a full-vehicle shipment is legal.
+
+    Customer 1 keeps its own shipment so the instance stays complete and this test still fails
+    only on the capacity boundary it is named for.
+    """
     base = build_instance()
     instance = dataclasses.replace(
-        base, shipments=(Shipment(0, source_id=0, customer_id=0, size_kg=750.0),)
+        base,
+        shipments=(
+            Shipment(0, source_id=0, customer_id=0, size_kg=750.0),
+            Shipment(1, source_id=0, customer_id=1, size_kg=37.5),
+        ),
     )
     assert instance.shipments[0].size_kg == 750.0
 
@@ -198,6 +214,51 @@ def test_instance_rejects_an_empty_shipment_list() -> None:
 def test_n_deliveries_equals_customer_count(small_instance: Instance) -> None:
     """The KPI denominator is the customer count, since each customer receives one shipment."""
     assert small_instance.n_deliveries == len(small_instance.customers)
+
+
+def test_instance_rejects_a_customer_with_no_shipment() -> None:
+    """An undeliverable customer would make the KPI denominator overstate the work available."""
+    base = build_instance()
+    with pytest.raises(InstanceError, match="destination of no shipment"):
+        dataclasses.replace(
+            base, shipments=(Shipment(0, source_id=0, customer_id=0, size_kg=37.5),)
+        )
+
+
+def test_instance_rejects_a_customer_with_two_shipments() -> None:
+    """Two shipments to one customer would let a single stop discharge two drops."""
+    base = build_instance()
+    with pytest.raises(InstanceError, match="destination of more than one shipment"):
+        dataclasses.replace(
+            base,
+            shipments=(
+                Shipment(0, source_id=0, customer_id=0, size_kg=37.5),
+                Shipment(1, source_id=0, customer_id=0, size_kg=37.5),
+                Shipment(2, source_id=0, customer_id=1, size_kg=37.5),
+            ),
+        )
+
+
+def test_instance_rejects_two_hubs_at_the_same_coordinate() -> None:
+    """Coincident hubs make hub assignment arbitrary while still charging fixed cost twice."""
+    shared = Coordinate(19.00, 72.90)
+    with pytest.raises(InstanceError, match="hub coordinates must be distinct"):
+        Instance(
+            seed=0,
+            geo=TWO_HUB_GEO,
+            fleet=FleetConfig(),
+            schedule=ScheduleConfig(),
+            hubs=(Hub(0, shared), Hub(1, shared)),
+            sources=(Source(0, Coordinate(19.05, 72.95)),),
+            customers=(
+                Customer(0, Coordinate(19.10, 73.00), None),
+                Customer(1, Coordinate(19.15, 73.05), None),
+            ),
+            shipments=(
+                Shipment(0, source_id=0, customer_id=0, size_kg=37.5),
+                Shipment(1, source_id=0, customer_id=1, size_kg=37.5),
+            ),
+        )
 
 
 @pytest.mark.parametrize(

@@ -260,7 +260,8 @@ def evaluate_solution(solution: Solution, instance: Instance, cost_config: CostC
     Raises:
         InfeasibleSolutionError: If the plan breaks a hard constraint — a tour over capacity, a
             tour leaving from the wrong hub, a stop served twice, a stop served in the wrong
-            stage, or a plan that makes no deliveries at all and so has no cost per drop.
+            stage, or a plan that leaves work undone (a customer undelivered, or a source with
+            shipments waiting uncollected).
     """
     _validate_structure(solution, instance)
 
@@ -274,17 +275,15 @@ def evaluate_solution(solution: Solution, instance: Instance, cost_config: CostC
         CostBreakdown.zero(),
     )
 
-    # Validation has already established that every Stage 2 stop is a customer visited once.
-    deliveries = sum(route.n_stops for route in solution.stage2_routes)
-    _require(deliveries > 0, "a plan that delivers nothing has no cost per drop")
-
     duration_hr = solution.total_duration_s / SECONDS_PER_HOUR
     stops = sum(route.n_stops for route in solution.all_routes)
     fleet_capacity_kg = solution.vehicles_used * instance.fleet.vehicle_capacity_kg
 
     return Metrics(
         total_cost_inr=breakdown.total_inr,
-        cost_per_drop_inr=Rupees(breakdown.total_inr / deliveries),
+        # Through the instance, not through the plan's own stop count: validation has established
+        # the two are equal, and dividing by the requirement says so out loud.
+        cost_per_drop_inr=Rupees(breakdown.total_inr / instance.n_deliveries),
         total_distance_km=solution.total_distance_m / METRES_PER_KM,
         total_duration_hr=duration_hr,
         vehicles_used=solution.vehicles_used,
@@ -308,8 +307,41 @@ def _validate_structure(solution: Solution, instance: Instance) -> None:
             f"route from hub {route.hub_id} carries {route.load_kg} kg over capacity "
             f"{instance.fleet.vehicle_capacity_kg} kg",
         )
-    _validate_stage(solution.stage1_routes, instance.is_source_node, "Stage 1", "source")
-    _validate_stage(solution.stage2_routes, instance.is_customer_node, "Stage 2", "customer")
+    _validate_stage(
+        solution.stage1_routes,
+        instance.is_source_node,
+        "Stage 1",
+        "source",
+        _required_source_nodes(instance),
+    )
+    _validate_stage(
+        solution.stage2_routes,
+        instance.is_customer_node,
+        "Stage 2",
+        "customer",
+        _required_customer_nodes(instance),
+    )
+
+
+def _required_source_nodes(instance: Instance) -> frozenset[NodeId]:
+    """Source nodes Stage 1 must collect from: those at least one shipment originates at.
+
+    Derived from the shipment list rather than the source list on purpose. A source with nothing
+    waiting has nothing to collect, so a tour that skips it is correct rather than incomplete —
+    and with origins drawn uniformly, some sources come out empty.
+    """
+    return frozenset(instance.source_node(shipment.source_id) for shipment in instance.shipments)
+
+
+def _required_customer_nodes(instance: Instance) -> frozenset[NodeId]:
+    """Customer nodes Stage 2 must deliver to: all of them.
+
+    Every customer is the destination of exactly one shipment, enforced when the instance is
+    built, so there is no such thing as a customer with nothing to receive.
+    """
+    return frozenset(
+        instance.customer_node(customer.customer_id) for customer in instance.customers
+    )
 
 
 def _validate_stage(
@@ -317,11 +349,24 @@ def _validate_stage(
     is_legal_stop: Callable[[NodeId], bool],
     stage: str,
     stop_kind: str,
+    required: frozenset[NodeId],
 ) -> None:
-    """Check that a stage visits only its own kind of node, and each such node at most once."""
+    """Check that a stage visits exactly the nodes it must, each exactly once.
+
+    Completeness is checked here, in the scorer, because cost per drop is only comparable
+    between plans that do the same work. Without it, omitting the most expensive customers
+    lowers the numerator and improves the reported KPI — the cheapest plan would be the one that
+    delivers least.
+    """
     seen: set[NodeId] = set()
     for route in routes:
         for node in route.interior_nodes:
             _require(is_legal_stop(node), f"{stage} route stops at node {node}, not a {stop_kind}")
             _require(node not in seen, f"{stage} serves {stop_kind} node {node} more than once")
             seen.add(node)
+    missing = sorted(required - seen)
+    if missing:
+        raise InfeasibleSolutionError(
+            f"{stage} leaves {len(missing)} of {len(required)} {stop_kind}s unserved "
+            f"(lowest unserved node {missing[0]})"
+        )

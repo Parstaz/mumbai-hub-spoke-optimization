@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -175,6 +176,12 @@ class Instance:
                 lat_lo <= coord.lat <= lat_hi and lon_lo <= coord.lon <= lon_hi,
                 f"coordinate {coord} lies outside the configured bounding box",
             )
+        hub_points = {(hub.coord.lat, hub.coord.lon) for hub in self.hubs}
+        _require(
+            len(hub_points) == len(self.hubs),
+            "hub coordinates must be distinct: two hubs at one point make hub assignment "
+            "arbitrary while still charging fixed cost twice",
+        )
 
     def _validate_shipments(self) -> None:
         for shipment in self.shipments:
@@ -189,6 +196,29 @@ class Instance:
             _require(
                 0.0 < shipment.size_kg <= self.fleet.vehicle_capacity_kg,
                 f"shipment {shipment.shipment_id} cannot be carried by any vehicle",
+            )
+        self._validate_delivery_coverage()
+
+    def _validate_delivery_coverage(self) -> None:
+        """Require every customer to be the destination of exactly one shipment.
+
+        The headline KPI divides total cost by the customer count, so this 1:1 relationship is
+        what makes cost per drop well defined. Enforced here rather than assumed from the
+        generator, because an instance also arrives by deserialisation: without it, the
+        denominator and the work actually to be done could silently disagree.
+        """
+        per_customer = Counter(shipment.customer_id for shipment in self.shipments)
+        unserved = [c.customer_id for c in self.customers if per_customer[c.customer_id] == 0]
+        if unserved:
+            raise InstanceError(
+                f"{len(unserved)} of {len(self.customers)} customers are the destination of no "
+                f"shipment (lowest customer_id {unserved[0]})"
+            )
+        repeated = sorted(cid for cid, count in per_customer.items() if count > 1)
+        if repeated:
+            raise InstanceError(
+                f"{len(repeated)} of {len(self.customers)} customers are the destination of more "
+                f"than one shipment (lowest customer_id {repeated[0]})"
             )
 
     def _all_coordinates(self) -> tuple[Coordinate, ...]:
@@ -211,7 +241,12 @@ class Instance:
 
     @property
     def n_deliveries(self) -> int:
-        """Number of drops a complete solution must make — the denominator of the headline KPI."""
+        """Drops a complete solution must make — the denominator of the headline KPI.
+
+        Equal to the customer count, and that equality is a guarantee rather than a convention:
+        construction enforces that every customer is the destination of exactly one shipment
+        (see :meth:`_validate_delivery_coverage`).
+        """
         return len(self.customers)
 
     def hub_node(self, hub_id: int) -> NodeId:
