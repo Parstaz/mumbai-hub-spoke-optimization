@@ -1,0 +1,69 @@
+[project]
+name = "mumbai-hub-spoke-optimization"
+version = "0.1.0"
+description = "Two-stage hub-and-spoke pickup and delivery optimization over a synthetic Mumbai network"
+# 3.12 rather than 3.11: numpy 2.5's bundled stubs use PEP 695 `type` statements, which mypy
+# only analyses under a 3.12+ target. Keeping the metadata, ruff and mypy targets identical
+# avoids checking against a version the toolchain cannot actually verify.
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = [
+    "A",    # builtin shadowing
+    "ANN",  # missing annotations
+    "ARG",  # unused arguments
+    "B",    # bugbear
+    "C4",   # comprehensions
+    "C90",  # mccabe complexity
+    "D",    # pydocstyle
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # import sorting
+    "N",    # naming
+    "NPY",  # numpy-specific rules
+    "PL",   # pylint
+    "PTH",  # prefer pathlib
+    "RET",  # return simplification
+    "RUF",  # ruff-specific rules
+    "SIM",  # simplification
+    "UP",   # pyupgrade
+    "W",    # pycodestyle warnings
+]
+ignore = [
+    "D105",  # magic methods: the dataclass contract documents them
+    "D107",  # dataclass __init__ is generated; the class docstring covers it
+]
+# Typography used deliberately in reports and docstrings: ranges, dimensions, coordinates.
+allowed-confusables = ["–", "×", "°"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pylint]
+max-args = 5
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["PLR2004"]  # comparing against literal expected values is the point of a test
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["matplotlib.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+filterwarnings = ["error"]
