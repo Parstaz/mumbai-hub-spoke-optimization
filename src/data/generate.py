@@ -135,6 +135,10 @@ def _place_hubs(geo: GeoConfig, centres: Points, rng: np.random.Generator) -> Po
 
     Clustering runs in an isotropic plane: at 19°N a degree of longitude is ~5% shorter than a
     degree of latitude, and clustering in raw degrees would stretch the hub network east-west.
+
+    Note that ``hub_candidate_pool`` consumes the generator stream before sources and customers
+    are drawn, so changing it moves every downstream coordinate too — it reshapes the whole
+    instance for a given seed, not just where the hubs land.
     """
     pool = _sample_points(geo.hub_candidate_pool, geo, centres, rng)
     lon_scale = math.cos(math.radians(0.5 * (geo.lat_min + geo.lat_max)))
@@ -189,17 +193,38 @@ def _kmeans_plusplus_init(points: Points, k: int, rng: np.random.Generator) -> P
 def _lloyd_step(points: Points, centroids: Points) -> Points:
     """One assign-then-recentre pass.
 
-    A centroid that loses every member is re-seeded onto the worst-served candidate rather than
-    left to produce a NaN centroid — which would poison every distance matrix downstream.
+    A centroid that loses every member is re-seeded onto the point its surviving siblings serve
+    worst, rather than left to produce a NaN centroid that would poison every distance matrix
+    downstream. Re-seeding happens one centroid at a time with the distances recomputed after
+    each placement: choosing all re-seed points up front drops two centroids orphaned in the
+    same pass onto the same candidate, whereupon ``np.allclose`` reports convergence and the run
+    returns fewer distinct hubs than were configured.
     """
-    distances = _squared_distances(points, centroids)
-    labels = distances.argmin(axis=1)
-    orphan = int(distances.min(axis=1).argmax())
+    labels = _squared_distances(points, centroids).argmin(axis=1)
     updated = centroids.copy()
+    populated = {index for index in range(len(centroids)) if bool(np.any(labels == index))}
+    for index in populated:
+        updated[index] = points[labels == index].mean(axis=0)
+
+    placed = sorted(populated)
     for index in range(len(centroids)):
-        members = points[labels == index]
-        updated[index] = members.mean(axis=0) if len(members) else points[orphan]
+        if index in populated:
+            continue
+        updated[index] = _worst_served_point(points, updated[placed])
+        placed.append(index)
     return updated
+
+
+def _worst_served_point(points: Points, centroids: Points) -> npt.NDArray[np.float64]:
+    """The single ``[lat, lon]`` point farthest from every centroid — the best place to add one.
+
+    Every point is assigned to some centroid, so ``centroids`` is never empty here: at least one
+    cluster keeps a member.
+    """
+    farthest = int(_squared_distances(points, centroids).min(axis=1).argmax())
+    # Indexing an ndarray with a scalar is untyped in the numpy stubs; the annotation narrows it.
+    point: npt.NDArray[np.float64] = points[farthest]
+    return point
 
 
 def _squared_distances(points: Points, centroids: Points) -> npt.NDArray[np.float64]:

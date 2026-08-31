@@ -1,13 +1,13 @@
 """Scatter plot of an instance's geography: hubs, sources, customers.
 
-The three node classes are an *identity* encoding, so they take the first three slots of the
-categorical palette — the set validated for all-pairs colour-vision separation, which is the
-list that applies to scatter plots (any two series can end up adjacent on screen, not just
-neighbours in a legend). Shape carries the distinction a second time, so the figure survives
-greyscale printing and colour-vision deficiency without relying on hue.
+The three node classes are an identity encoding: each gets one of three distinct hues, and each
+hue is reinforced by a distinct marker shape — square hubs, triangular sources, round customers.
+Carrying the distinction twice means the figure survives greyscale printing and colour-vision
+deficiency without relying on hue alone. A legend is always present for the same reason.
 
-Light and dark variants are separately chosen steps against their own surface, not an inverted
-copy of one another.
+Light and dark variants are separately chosen against their own surface rather than one being an
+inversion of the other, since inverting a light palette gives dark-mode colours that vibrate
+against a dark background.
 """
 
 from __future__ import annotations

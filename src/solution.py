@@ -196,8 +196,24 @@ class Metrics:
     vehicles_used: int
     tw_violations: int
     tw_lateness_hr: float
+
     stops_per_hour: float
+    """Stops per vehicle-hour across **both** stages — pickups and drops alike.
+
+    Deliberately a different population from ``cost_per_drop_inr``, which divides by Stage 2
+    deliveries only. This one answers "how productive is the fleet", so collection stops count;
+    that one answers "what does a drop cost", so they do not. Do not multiply one by the other.
+    """
+
     capacity_utilisation: float
+    """Mean load factor over every vehicle-day deployed, both stages.
+
+    The same freight is counted twice — once inbound to a hub, once outbound to a customer —
+    because both legs consume a vehicle. That makes this a fleet-wide figure comparable across
+    plans, not a per-leg one: a plan cannot improve it by shifting work between stages, only by
+    filling vehicles better. Read a single stage's utilisation off its own routes instead.
+    """
+
     breakdown: CostBreakdown
 
 

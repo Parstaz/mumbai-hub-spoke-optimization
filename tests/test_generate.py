@@ -22,7 +22,7 @@ from src.config import (
     GeoConfig,
     ScheduleConfig,
 )
-from src.data.generate import generate_instance
+from src.data.generate import _lloyd_step, generate_instance
 from src.data.instance import Instance, Source
 from src.exceptions import InstanceError
 from tests.conftest import SMALL_GEO
@@ -199,6 +199,23 @@ def test_single_hub_and_single_customer_are_legal() -> None:
     instance = _generate(geo, seed=2)
     assert instance.n_nodes == 3
     assert len(instance.shipments) == 1
+
+
+def test_lloyd_step_reseeds_two_orphaned_centroids_to_distinct_points() -> None:
+    """Two centroids orphaned in a single pass must not be re-seeded onto the same point.
+
+    Choosing all re-seed points before placing any of them puts both on the worst-served
+    candidate; ``np.allclose`` then reports convergence and the run yields fewer distinct hubs
+    than configured. Here three points feed four centroids so that two are left empty: c1 and c2
+    lose every member, while c0 keeps two points and c3 keeps the far one.
+    """
+    points = np.array([[0.0, 0.0], [0.0, 0.001], [10.0, 10.0]])
+    centroids = np.array([[0.0, 0.0], [5.0, 5.0], [6.0, 6.0], [7.0, 7.0]])
+
+    updated = _lloyd_step(points, centroids)
+
+    assert len({tuple(row) for row in updated}) == len(centroids)
+    assert not np.isnan(updated).any()
 
 
 def test_hub_count_is_honoured_when_the_pool_is_exactly_the_hub_count() -> None:
