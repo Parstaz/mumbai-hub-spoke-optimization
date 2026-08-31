@@ -30,15 +30,14 @@ from src.data.instance import (
     TimeWindow,
 )
 from src.exceptions import InfeasibleSolutionError, OptimizationError
-from src.solution import (
+from src.scoring import (
     CostBreakdown,
     Metrics,
-    Route,
-    Solution,
     evaluate_solution,
     route_cost,
     route_window_outcome,
 )
+from src.solution import Route, Solution
 from src.units import Rupees, Seconds
 from tests.conftest import build_instance, make_route
 

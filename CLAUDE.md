@@ -26,7 +26,7 @@ These are settled. Do not redesign them, and do not propose alternatives mid-tas
   repair operator in this codebase and none is to be introduced.
 - `src/stage2/ortools_reference.py` is a quality benchmark behind a `--reference` flag. It is not
   part of the pipeline and must not be invoked from it.
-- **Single scoring path.** `evaluate_solution()` in `src/solution.py` is the only function that
+- **Single scoring path.** `evaluate_solution()` in `src/scoring.py` is the only function that
   scores a `Solution`. Baseline and optimized pipeline both call it. A second scoring
   implementation is a defect, not a convenience.
 - **Capacity is hard, enforced by construction** — infeasible arcs are never created in the split
