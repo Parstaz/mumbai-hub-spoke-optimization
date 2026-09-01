@@ -244,6 +244,9 @@ def test_ga_config_allows_full_elitism_minus_one() -> None:
         {"seed": -1},
         {"osrm_url": "   "},
         {"circuity_factor": 0.99},
+        {"osrm_max_table_size": 0},
+        {"osrm_timeout_s": 0.0},
+        {"haversine_speed_kmph": 0.0},
     ],
 )
 def test_run_config_rejects(kwargs: dict[str, object]) -> None:
@@ -255,3 +258,23 @@ def test_run_config_rejects(kwargs: dict[str, object]) -> None:
 def test_run_config_allows_unit_circuity() -> None:
     """A circuity factor of exactly one means straight-line roads: legal, if optimistic."""
     assert RunConfig(circuity_factor=1.0).circuity_factor == 1.0
+
+
+def test_run_config_matrix_defaults() -> None:
+    """The chunk size mirrors the public OSRM demo server's own limit; see docker-compose.yml."""
+    run = RunConfig()
+    assert run.osrm_max_table_size == 100
+    assert run.haversine_speed_kmph == 24.0
+    # 5001, not OSRM's usual 5000: macOS binds 5000 to the AirPlay Receiver. Must match the port
+    # docker-compose.yml publishes, or the pipeline falls back to haversine and reads as an outage.
+    assert run.osrm_url.endswith(":5001")
+
+
+def test_circuity_factor_is_the_measured_value() -> None:
+    """Pinned to the landmark measurement (1.13–1.40, mean 1.28) against a live OSRM build.
+
+    A test rather than a comment because this is the one constant in the config that was fitted
+    to observed data. Changing it silently would make the fallback disagree with `make providers`
+    without anything failing.
+    """
+    assert RunConfig().circuity_factor == 1.30

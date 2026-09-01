@@ -21,6 +21,13 @@ SECONDS_PER_MINUTE = 60.0
 SECONDS_PER_HOUR = 3600.0
 METRES_PER_KM = 1000.0
 
+EARTH_RADIUS_M = 6_371_008.8
+"""IUGG mean Earth radius, used by the haversine fallback.
+
+The 0.3% spread between the equatorial and polar radii is an order of magnitude below the error
+already introduced by ``circuity_factor``, so a spherical model is the right level of care here.
+"""
+
 MIN_TOURNAMENT_K = 2
 """A tournament needs at least two contestants to select between."""
 
@@ -291,14 +298,40 @@ class GAConfig:
 class RunConfig:
     """Per-run execution settings: seed, distance provider, cache location.
 
-    ``circuity_factor`` scales haversine distance up to a road-network estimate and is used
-    only on the fallback path when OSRM is unavailable.
+    ``circuity_factor`` and ``haversine_speed_kmph`` describe the fallback only: great-circle
+    distance scaled to a road-network estimate, and the average speed that turns it into a
+    free-flow duration. 24 km/h is a plausible all-day Mumbai average *before* the traffic
+    multipliers are applied on top, since those are what make the peak hours slow.
+
+    1.30 is measured, not assumed: OSRM road distance over great-circle distance across eight
+    Mumbai landmarks runs 1.13–1.40 with a mean of 1.28 (``make providers``). It is calibrated
+    against *well-connected real places* on purpose. The same ratio over this instance's own
+    nodes is far higher — around 1.9 on the legs a tour drives — but that figure is not
+    circuity: roughly a quarter of generated nodes sit more than 500 m from any routable road,
+    so OSRM measures between snapped positions while the great-circle measures between the
+    originals. The contamination is visible as ratios *below* 1.0, which no real road network
+    can produce. Fitting this constant to that number would encode a data-generation artefact
+    under a name that claims to describe roads. See the README's limitations.
+
+    The default port is 5001, not OSRM's conventional 5000, because macOS binds 5000 to the
+    AirPlay Receiver and a default that fails on a fresh clone is not a default. It matches the
+    port ``docker-compose.yml`` publishes; change the two together.
+
+    ``osrm_max_table_size`` mirrors the server's own limit. OSRM rejects a ``/table`` request
+    whose ``sources × destinations`` cell count exceeds ``max-table-size²``, so this is the side
+    length of the largest square block a single request may ask for — not a coordinate budget for
+    the whole matrix. The default matches the public demo server, and the bundled
+    ``docker-compose.yml`` pins the local server to the same value so development exercises the
+    identical constraint.
     """
 
     seed: int = 42
-    osrm_url: str = "http://127.0.0.1:5000"
+    osrm_url: str = "http://127.0.0.1:5001"
     use_osrm: bool = True
-    circuity_factor: float = 1.35
+    osrm_max_table_size: int = 100
+    osrm_timeout_s: float = 30.0
+    circuity_factor: float = 1.30
+    haversine_speed_kmph: float = 24.0
     cache_dir: Path = Path("data/cache")
     data_dir: Path = Path("data")
     figure_dir: Path = Path("figures")
@@ -306,10 +339,13 @@ class RunConfig:
     def __post_init__(self) -> None:
         _require(self.seed >= 0, "seed must be non-negative")
         _require(bool(self.osrm_url.strip()), "osrm_url must not be blank")
+        _require(self.osrm_max_table_size > 0, "osrm_max_table_size must be positive")
+        _require(self.osrm_timeout_s > 0.0, "osrm_timeout_s must be positive")
         _require(
             self.circuity_factor >= 1.0,
             "circuity_factor must be >= 1.0: road distance is never shorter than great-circle",
         )
+        _require(self.haversine_speed_kmph > 0.0, "haversine_speed_kmph must be positive")
 
 
 @dataclass(frozen=True, slots=True)

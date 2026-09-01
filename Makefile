@@ -5,11 +5,55 @@ PYTEST := .venv/bin/pytest
 
 SEED ?= 42
 
-.PHONY: data lint format check types unit test
+# 5001 rather than OSRM's conventional 5000: macOS holds 5000 with the AirPlay Receiver unless
+# it is disabled in System Settings > General > AirDrop & Handoff, so 5000 fails on a fresh
+# clone on every Mac. Override to get it back: `OSRM_PORT=5000 make osrm-up providers`.
+# RunConfig.osrm_url defaults to the same port; change both together or the pipeline points at
+# nothing and falls back to haversine, which reads as an outage rather than a mismatch.
+OSRM_PORT ?= 5001
+export OSRM_PORT
+
+OSRM_DIR := data/osrm
+OSRM_PBF := $(OSRM_DIR)/maharashtra-latest.osm.pbf
+# openstreetmap.fr rather than Geofabrik: Geofabrik does not publish a per-state India extract,
+# only six multi-state zones, and its 302 to the index page for a non-existent path is
+# indistinguishable from a download to anything that does not check what it received.
+OSRM_EXTRACT_URL := https://download.openstreetmap.fr/extracts/asia/india/maharashtra-latest.osm.pbf
+
+.PHONY: data providers osrm osrm-up osrm-down lint format check types unit cov test
 
 ## generate a seeded synthetic instance, print summary stats, render the scatter plot
 data:
 	$(PY) -m src.cli.generate_data --seed $(SEED) --theme both
+
+## landmark distances under both providers, plus the traffic bands applied to one leg
+providers:
+	$(PY) -m src.cli.compare_providers --osrm-url http://127.0.0.1:$(OSRM_PORT)
+
+## one-time OSRM setup: download the extract, then extract -> partition -> customize -> routed.
+## Takes 15-30 minutes and roughly 4 GB of RAM; the artefacts persist in $(OSRM_DIR).
+osrm: $(OSRM_PBF)
+	docker compose --profile build run --rm osrm-extract
+	docker compose --profile build run --rm osrm-partition
+	docker compose --profile build run --rm osrm-customize
+	$(MAKE) osrm-up
+
+# Downloaded to .part and renamed only once it is verified to be a PBF. A mirror that answers a
+# bad path with an HTML page otherwise leaves a file make considers up to date, and osrm-extract
+# fails 20 minutes later with "invalid BlobHeader size" instead of "that is not an extract".
+$(OSRM_PBF):
+	mkdir -p $(OSRM_DIR)
+	curl -fL --retry 3 -o $@.part $(OSRM_EXTRACT_URL)
+	@head -c 32 $@.part | grep -aq OSMHeader \
+	  || { echo "ERROR: $(OSRM_EXTRACT_URL) returned $$(file -b $@.part), not an OSM PBF"; \
+	       rm -f $@.part; exit 1; }
+	mv $@.part $@
+
+osrm-up:
+	docker compose up -d osrm
+
+osrm-down:
+	docker compose down
 
 lint:
 	$(RUFF) check . --fix
@@ -26,6 +70,11 @@ types:
 
 unit:
 	$(PYTEST) -q
+
+## line coverage against the >= 90% standard. Deliberately not part of `test`: the gate stays
+## the four checks the definition of done names, and coverage is read, not enforced by a number.
+cov:
+	$(PYTEST) -q --cov=src/costs --cov=src/stage1 --cov=src/stage2 --cov-report=term-missing
 
 ## the gate: everything that must pass before a step is considered complete
 test: check types unit

@@ -163,11 +163,14 @@ files.
 
 ```bash
 make osrm      # one-time OSRM Docker setup (extract, partition, customize, routed)
+make osrm-up   # start the routing server (port 5001); osrm-down to stop it
 make data      # generate seeded synthetic instance
+make providers # landmark distances under both providers + traffic bands on one leg
 make baseline  # greedy baseline, print metrics
 make run       # full Stage 1 + Stage 2 pipeline, one seed
 make eval      # multi-seed evaluation → results CSV
-make test      # ruff + mypy + pytest
+make test      # ruff + mypy + pytest — the gate
+make cov       # line coverage on src/costs, src/stage1, src/stage2 against the ≥ 90% standard
 ```
 
 ---
@@ -198,7 +201,7 @@ A step is complete only when all of the following hold:
 ## 7. Build status
 
 - [x] 1 — config, synthetic data, `Solution` + `evaluate_solution()`
-- [ ] 2 — cost layer: chunked OSRM matrix, parquet cache, cumulative traffic bands
+- [x] 2 — cost layer: chunked OSRM matrix, parquet cache, cumulative traffic bands
 - [ ] 3 — greedy baseline
 - [ ] 4 — Stage 1: hub assignment (nearest / min-cost-flow) + per-hub CVRP
 - [ ] 5 — split procedure + property tests ← correctness linchpin; must pass before step 6
@@ -225,7 +228,15 @@ Stated plainly in the README. Do not soften or omit them.
 Append a line when the same mistake occurs twice. Do not add entries speculatively.
 
 - OSRM `/table` enforces `max_table_size` (100 on the public demo server). Matrices here are
-  ~1100×1100; requests must be chunked via `sources=` / `destinations=` and reassembled.
+  ~1100×1100; requests must be chunked via `sources=` / `destinations=` and reassembled. The
+  limit is a **cell budget of `max_table_size²`**, not a coordinate count, so square blocks of
+  side `max_table_size` are legal. Send only each block's own coordinates: the full node list in
+  the URL is a 22 kB request line the server rejects.
+- OSRM's host port is **5001**, not 5000 — macOS binds 5000 to the AirPlay Receiver, so 5000
+  fails on a fresh clone on every Mac. `RunConfig.osrm_url` and `docker-compose.yml` must agree;
+  a mismatch falls back to haversine and reads as an outage rather than a misconfiguration.
+- `urlparse` splits a trailing `;`-separated group off the last path segment as RFC 2396
+  "params", silently discarding every OSRM coordinate after the first. Use `urlsplit`.
 - The assembled matrix must be cached to parquet, keyed by `(seed, provider, n_nodes, coord_hash)`.
   Without it, re-querying during fitness evaluation dominates runtime.
 - Per-hub solves run under `multiprocessing`. Anything shared across hubs must be immutable or

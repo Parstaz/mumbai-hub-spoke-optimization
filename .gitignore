@@ -1,6 +1,7 @@
 __pycache__/
 .venv/
 data/cache/
+data/osrm/
 *.parquet
 results/
 .env
@@ -9,3 +10,5 @@ data/*.json
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+.coverage
+htmlcov/

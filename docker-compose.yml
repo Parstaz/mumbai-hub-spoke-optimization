@@ -1,0 +1,52 @@
+# Self-hosted OSRM for the Maharashtra extract.
+#
+# Two groups of services. `osrm` is the long-running routing daemon the pipeline queries. The
+# three `build` profile services are the one-time preprocessing pipeline and are not started by
+# `docker compose up` — see the README, or run `make osrm`.
+#
+# The MLD pipeline (extract -> partition -> customize) rather than CH is deliberate: the
+# `annotations=distance` parameter this codebase depends on is only served under MLD. A CH build
+# answers /table with durations and no distances, which src/costs/matrix.py rejects by name.
+#
+# The image tag is pinned. OSRM's on-disk `.osrm.*` format is not stable across minor versions,
+# and a floating tag turns "my cache is stale" into "my extract silently no longer loads".
+
+x-osrm-common: &osrm-common
+  image: ghcr.io/project-osrm/osrm-backend:v5.27.1
+  volumes:
+    - ./data/osrm:/data
+
+services:
+  # The routing server. `--max-table-size 100` mirrors the public OSRM demo server's own limit
+  # so that local development exercises the same chunking path production does; the client
+  # chunks to RunConfig.osrm_max_table_size regardless. Raise both together if you want fewer,
+  # larger requests — the limit is a cell budget of max-table-size squared, not a coordinate count.
+  osrm:
+    <<: *osrm-common
+    container_name: mumbai-osrm
+    command: >-
+      osrm-routed --algorithm mld --max-table-size 100 /data/maharashtra-latest.osrm
+    # Host port 5001, not OSRM's conventional 5000: macOS binds 5000 to the AirPlay Receiver by
+    # default, so 5000 fails on a fresh clone on every Mac. 5001 is free on macOS and Linux
+    # alike. Set OSRM_PORT to get 5000 back. Container-side is always 5000.
+    ports:
+      - "${OSRM_PORT:-5001}:5000"
+    restart: unless-stopped
+    # No healthcheck: the image carries no HTTP client, so any in-container probe would test the
+    # process rather than the loaded graph. Verify from the host with the curl in the README, or
+    # with `make providers` — an unreachable or empty graph shows up there as a fallback warning.
+
+  osrm-extract:
+    <<: *osrm-common
+    profiles: ["build"]
+    command: osrm-extract -p /opt/car.lua /data/maharashtra-latest.osm.pbf
+
+  osrm-partition:
+    <<: *osrm-common
+    profiles: ["build"]
+    command: osrm-partition /data/maharashtra-latest.osrm
+
+  osrm-customize:
+    <<: *osrm-common
+    profiles: ["build"]
+    command: osrm-customize /data/maharashtra-latest.osrm
