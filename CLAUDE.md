@@ -133,8 +133,9 @@ Secondary: stops per hour, capacity utilisation.
 - `pytest`. Tests mirror the source tree: `tests/test_<module>.py`.
 - Every test is deterministic and seeded. **No network access in tests** — OSRM is stubbed at the
   provider boundary.
-- Target ≥ 90% line coverage on `src/stage2/`, `src/stage1/`, `src/costs/`. Entry points and
-  plotting are exempt.
+- Target ≥ 90% line coverage on `src/stage2/`, `src/stage1/`, `src/costs/`, `src/baseline/`. Entry
+  points and plotting are exempt. The baseline is in the list because it produces the comparison
+  column: an untested benchmark makes every improvement claim unfalsifiable.
 - Property-based tests (`hypothesis`) are mandatory for:
   - `split()` — every returned route respects capacity; the union of routes equals the input
     permutation exactly, with no duplicates or omissions.
@@ -202,7 +203,7 @@ A step is complete only when all of the following hold:
 
 - [x] 1 — config, synthetic data, `Solution` + `evaluate_solution()`
 - [x] 2 — cost layer: chunked OSRM matrix, parquet cache, cumulative traffic bands
-- [ ] 3 — greedy baseline
+- [x] 3 — greedy baseline
 - [ ] 4 — Stage 1: hub assignment (nearest / min-cost-flow) + per-hub CVRP
 - [ ] 5 — split procedure + property tests ← correctness linchpin; must pass before step 6
 - [ ] 6 — Stage 2 GA: OX, or-opt, adaptive penalty, memetic 2-opt

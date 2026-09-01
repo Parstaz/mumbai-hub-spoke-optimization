@@ -5,9 +5,10 @@ network. Stage 1 consolidates ~300 sources into 16 hubs (OR-Tools CVRP + min-cos
 runs a hand-written genetic algorithm to deliver from those hubs to ~800 customers under capacity
 and time windows. The headline KPI is **cost per drop (₹/delivery)**.
 
-> **Build status.** This README currently documents the cost layer only — the distance/duration
-> matrices and the traffic model (step 2 of 9). The full write-up, results tables and figures land
-> with step 9.
+> **Build status.** This README currently documents the cost layer — the distance/duration
+> matrices and the traffic model — and the greedy nearest-neighbour baseline (step 3 of 9).
+> Neither optimized stage is built yet, so there is no comparison to report: the full write-up,
+> results tables and figures land with step 9.
 
 ---
 
@@ -19,6 +20,7 @@ a clean checkout with no Docker and no OSM data:
 ```bash
 make data                                   # seeded synthetic instance + scatter plot
 .venv/bin/python -m src.cli.compare_providers --no-osrm
+.venv/bin/python -m src.cli.run_baseline --no-osrm    # greedy benchmark + metrics table
 ```
 
 Distances are then haversine × `RunConfig.circuity_factor` (1.30, measured — see below), with
@@ -191,6 +193,7 @@ Stated plainly, and not softened anywhere else in the repository:
 make test      # ruff check + ruff format --check + mypy --strict + pytest
 make data      # regenerate the instance
 make providers # landmark distance comparison
+make baseline  # greedy nearest-neighbour benchmark, print its metrics
 make osrm      # one-time OSRM setup, then start the server
 make osrm-down # stop it
 ```

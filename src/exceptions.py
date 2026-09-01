@@ -19,6 +19,15 @@ class InstanceError(OptimizationError):
     """A problem instance is internally inconsistent, or could not be (de)serialised."""
 
 
+class InfeasibleInstanceError(OptimizationError):
+    """An instance cannot be served by the configured fleet, whatever the solver does.
+
+    Distinct from :class:`InstanceError`: the instance is internally consistent, it simply asks
+    for something the vehicles cannot do — a stop holding more mass than one vehicle can carry,
+    for a solver that never splits a stop across vehicles.
+    """
+
+
 class InfeasibleSolutionError(OptimizationError):
     """A solution violates a hard constraint: capacity, route structure, or duplicate visits.
 
