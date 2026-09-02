@@ -185,6 +185,37 @@ Stated plainly, and not softened anywhere else in the repository:
    *not* reproduce OSRM's totals on this instance. Every reported number comes from OSRM; any run
    that falls back logs it at `WARNING`, and results from the two providers must not be compared.
 
+6. **Capacity-balanced hub assignment does not pay here, and it is reported rather than hidden.**
+   Nearest-hub assignment is badly lopsided: on seed 42 hub 9 draws 8,850 kg while two hubs draw
+   300 kg each. The min-cost flow fixes exactly that — worst hub down to 2,738 kg at the default
+   `hub_balance_slack = 1.25` — and the inbound leg gets **1.7% more expensive**: +82 km, and not
+   one vehicle saved. Tightening the cap makes it worse, monotonically; a perfectly even split
+   (`--slack 1.0`) costs 7.4% more than nearest-hub *and* adds a vehicle.
+
+   The mechanism is that the vehicle floor is set by mass, and mass is not what makes an inbound
+   tour expensive. A hub drawing 8,850 kg simply dispatches twelve vehicles, and their tours stay
+   inside its own dense catchment. Moving a source to a less-loaded hub buys a long radial leg
+   and saves nothing, because the vehicle it would have shared was going to be full either way.
+   Balance only starts to pay where it happens to shed a whole vehicle, and at ₹1,000/vehicle
+   that is a lumpy, seed-dependent effect rather than a trend.
+
+   So Stage 1's improvement over the baseline — **−4.4%** on the inbound leg, 1,477 → 1,229 km at
+   an unchanged 48 tours — is the **CVRP's**, not the assignment's. Both strategies ship, because
+   the negative result is the interesting half of the ablation. `make stage1` prints all three
+   columns side by side and states the verdict from the numbers.
+
+7. **OR-Tools optimises a static arc cost.** A `RoutingModel` fixes arc costs before the search
+   begins, so the cumulative traffic model cannot live inside it; Stage 1's arc cost uses the
+   dispatch-hour multiplier as a stand-in. Every *reported* distance, duration and arrival time
+   still comes from the cumulative band-blended model in `src/tour.py`. The proxy affects which
+   tour is chosen, never what that tour is then said to cost.
+
+8. **Guided local search under a wall-clock limit is not bit-reproducible.** It returns whatever
+   it had reached when the clock ran out, so the same seed on a busier machine can yield a
+   different plan. Run `--deterministic` to stop at the first-solution heuristic, which is
+   reproducible; the test suite does. Step 9's multi-seed evaluation reports a spread for this
+   reason.
+
 ---
 
 ## Development
@@ -194,6 +225,7 @@ make test      # ruff check + ruff format --check + mypy --strict + pytest
 make data      # regenerate the instance
 make providers # landmark distance comparison
 make baseline  # greedy nearest-neighbour benchmark, print its metrics
+make stage1    # inbound leg: baseline vs the CVRP under each hub assignment
 make osrm      # one-time OSRM setup, then start the server
 make osrm-down # stop it
 ```

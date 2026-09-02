@@ -81,8 +81,12 @@ unit:
 
 ## line coverage against the >= 90% standard. Deliberately not part of `test`: the gate stays
 ## the four checks the definition of done names, and coverage is read, not enforced by a number.
+# src.workload, src.tour and src.scoring are named explicitly: they hold logic extracted out of
+# src/baseline, and a package-path target would have silently dropped it from the measurement at
+# the moment it stopped living under a measured directory.
 cov:
 	$(PYTEST) -q --cov=src/baseline --cov=src/costs --cov=src/stage1 --cov=src/stage2 \
+	  --cov=src.workload --cov=src.tour --cov=src.scoring \
 	  --cov-report=term-missing
 
 ## the gate: everything that must pass before a step is considered complete

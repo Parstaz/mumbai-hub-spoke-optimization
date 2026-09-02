@@ -28,7 +28,27 @@ These are settled. Do not redesign them, and do not propose alternatives mid-tas
   part of the pipeline and must not be invoked from it.
 - **Single scoring path.** `evaluate_solution()` in `src/scoring.py` is the only function that
   scores a `Solution`. Baseline and optimized pipeline both call it. A second scoring
-  implementation is a defect, not a convenience.
+  implementation is a defect, not a convenience. `stage_cost()` in the same module is the fold
+  underneath it, for pipeline steps that hold one stage's tours; it does no validation and
+  `evaluate_solution()` calls it exactly once, over both stages concatenated, so the two cannot
+  disagree by a floating-point regrouping.
+- **The baseline is the frozen control.** `src/baseline/` and the shared modules it depends on
+  (`src/workload.py`, `src/tour.py`) must never import `src/stage1/` or `src/stage2/`. If the
+  control drew code from the treatment, tuning the treatment would move the control's column with
+  it — silently, and in the direction that flatters the treatment. Shared helpers go to neutral
+  ground; only treatment-specific strategies live under a stage. Enforced by a test that walks
+  the import closure from `greedy.py`.
+- **No stop is ever split across vehicles.** A stop holding more mass than one vehicle can carry
+  makes the instance infeasible: `require_servable()` in `src/workload.py` raises
+  `InfeasibleInstanceError`, and it is the *one* expression of the rule — the greedy baseline,
+  the Stage 1 CVRP, the Stage 2 GA and the OR-Tools reference all call it. Two copies would let
+  step 8 compare solvers under different constraint sets. This is also why Stage 1's min-cost
+  flow carries one indivisible unit per source and therefore caps a source *count* rather than a
+  mass; a kilogram-denominated arc bound would split a source the instant a cap bound.
+- **Per-hub solves run under `multiprocessing`.** Anything shared across hubs must be immutable or
+  passed by value. A worker receives its own sliced matrices in a frozen dataclass and nothing
+  else — no `Config`, no `Instance`, no `Generator`. Use a **spawn** pool: OR-Tools starts
+  threads, and forking a threaded process is undefined.
 - **Capacity is hard, enforced by construction** — infeasible arcs are never created in the split
   DAG. It never appears as a fitness penalty.
 - **Time windows are soft** — penalised in fitness with an adaptive multiplier.
@@ -133,7 +153,8 @@ Secondary: stops per hour, capacity utilisation.
 - `pytest`. Tests mirror the source tree: `tests/test_<module>.py`.
 - Every test is deterministic and seeded. **No network access in tests** — OSRM is stubbed at the
   provider boundary.
-- Target ≥ 90% line coverage on `src/stage2/`, `src/stage1/`, `src/costs/`, `src/baseline/`. Entry
+- Target ≥ 90% line coverage on `src/stage2/`, `src/stage1/`, `src/costs/`, `src/baseline/`, and
+  the shared `src/workload.py`, `src/tour.py`, `src/scoring.py`. Entry
   points and plotting are exempt. The baseline is in the list because it produces the comparison
   column: an untested benchmark makes every improvement claim unfalsifiable.
 - Property-based tests (`hypothesis`) are mandatory for:
@@ -168,10 +189,11 @@ make osrm-up   # start the routing server (port 5001); osrm-down to stop it
 make data      # generate seeded synthetic instance
 make providers # landmark distances under both providers + traffic bands on one leg
 make baseline  # greedy baseline, print metrics
+make stage1    # inbound leg: baseline vs CVRP under each hub assignment
 make run       # full Stage 1 + Stage 2 pipeline, one seed
 make eval      # multi-seed evaluation → results CSV
 make test      # ruff + mypy + pytest — the gate
-make cov       # line coverage on src/costs, src/stage1, src/stage2 against the ≥ 90% standard
+make cov       # line coverage against the ≥ 90% standard (see §3 for the measured set)
 ```
 
 ---
@@ -204,7 +226,7 @@ A step is complete only when all of the following hold:
 - [x] 1 — config, synthetic data, `Solution` + `evaluate_solution()`
 - [x] 2 — cost layer: chunked OSRM matrix, parquet cache, cumulative traffic bands
 - [x] 3 — greedy baseline
-- [ ] 4 — Stage 1: hub assignment (nearest / min-cost-flow) + per-hub CVRP
+- [x] 4 — Stage 1: hub assignment (nearest / min-cost-flow) + per-hub CVRP
 - [ ] 5 — split procedure + property tests ← correctness linchpin; must pass before step 6
 - [ ] 6 — Stage 2 GA: OX, or-opt, adaptive penalty, memetic 2-opt
 - [ ] 7 — ablation: with vs without local search
@@ -221,6 +243,16 @@ Stated plainly in the README. Do not soften or omit them.
    inbound is not necessarily optimal for outbound. Co-optimization is out of scope.
 2. All data is synthetic.
 3. Traffic multipliers are illustrative, not calibrated against observed Mumbai traffic.
+4. **Capacity-balanced hub assignment does not pay on the default instance.** It removes the
+   imbalance it targets — worst hub 8,850 kg → 2,738 kg at `hub_balance_slack=1.25` — and costs
+   1.7% more on the inbound leg (+82 km, no vehicle saved). Tightening the cap makes it worse
+   monotonically. The mechanism: the vehicle floor is set by mass, and mass is not what makes an
+   inbound tour expensive — geography is, so relocating a source to a less-loaded hub buys a
+   longer radial leg for nothing. Reported, not tuned away. `make stage1` prints the column.
+5. OR-Tools optimises a **static** arc cost using the dispatch-hour traffic multiplier, because a
+   `RoutingModel` fixes arc costs before searching. The cumulative band-blended model still
+   produces every reported figure, via `src/tour.py`. The proxy affects which tour is chosen, not
+   what it is then said to cost.
 
 ---
 
@@ -240,5 +272,15 @@ Append a line when the same mistake occurs twice. Do not add entries speculative
   "params", silently discarding every OSRM coordinate after the first. Use `urlsplit`.
 - The assembled matrix must be cached to parquet, keyed by `(seed, provider, n_nodes, coord_hash)`.
   Without it, re-querying during fitness evaluation dominates runtime.
-- Per-hub solves run under `multiprocessing`. Anything shared across hubs must be immutable or
-  passed by value — a shared `Generator` or mutable config silently destroys reproducibility.
+- A shared `Generator` or mutable config across per-hub workers silently destroys
+  reproducibility — the run still succeeds, and its numbers stop being repeatable. §1.1 has the
+  rule; this is the symptom to recognise.
+- `ortools` is built with SWIG, whose `SwigPyPacked`, `SwigPyObject` and `swigvarlink` types carry
+  no `__module__` attribute, which Python 3.14 deprecates. Under pytest's
+  `filterwarnings = ["error"]` that is raised inside `_pywrapcp`'s module init where it cannot
+  propagate, and the interpreter **segfaults during collection** — it does not fail a test.
+  `pyproject.toml` ignores that exact message and nothing broader.
+- OR-Tools guided local search under a wall-clock time limit is not reproducible: it returns
+  whatever it reached when the clock ran out, so a busier machine yields a different plan. Tests
+  must set `cvrp_solution_limit=1`, which stops at the first-solution heuristic and is
+  independent of the time limit.
