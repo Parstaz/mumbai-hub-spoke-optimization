@@ -21,6 +21,21 @@ SECONDS_PER_MINUTE = 60.0
 SECONDS_PER_HOUR = 3600.0
 METRES_PER_KM = 1000.0
 
+GRAMS_PER_KG = 1000
+"""Scale for handing masses to OR-Tools, whose capacity dimensions are integer-valued.
+
+The default 37.5 kg shipment is not a whole number of kilograms, so rounding demands to integer
+kilograms would drift by up to half a kilo per stop and could let a 20-stop tour appear to fit
+inside a vehicle it does not. Grams are exact for every shipment size this instance generates.
+"""
+
+COST_SCALE_MILLI_INR = 1000
+"""Scale for handing arc costs to OR-Tools, whose objective is integer-valued.
+
+One milli-rupee is about 11 cm of driving at ₹9/km — two orders of magnitude below the resolution
+of the road network the distances come from, so the rounding cannot change which arc is cheaper.
+"""
+
 EARTH_RADIUS_M = 6_371_008.8
 """IUGG mean Earth radius, used by the haversine fallback.
 
@@ -262,6 +277,45 @@ class ScheduleConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class Stage1Config:
+    """Inbound consolidation: how hard to balance the hubs, and how long to search each one.
+
+    ``hub_balance_slack`` is the only knob on the min-cost-flow assignment. It multiplies the even
+    share of sources per hub to give the cap the flow may not exceed: 1.0 forces a perfectly even
+    split regardless of geography, and a large value degenerates to nearest-hub. The quantity
+    capped is deliberately a **source count**, not a mass — one indivisible unit of flow per
+    source is what makes splitting a source across two hubs structurally impossible, and a
+    kilogram-denominated arc bound would split one the moment a cap bound.
+
+    ``cvrp_solution_limit`` is a reproducibility control, not a quality one. Guided local search
+    under a wall-clock limit returns whatever it reached before the clock ran out, so the same
+    instance on a busier machine yields a different plan. Setting this to 1 stops the search at
+    the first-solution heuristic, which is deterministic; the test suite runs that way. Zero means
+    unlimited, and is what a real run uses.
+
+    ``workers`` is the size of the per-hub process pool. Hubs are independent, so this is pure
+    speedup; zero means one worker per CPU, resolved when the pool is created rather than at
+    import, because a module-level ``os.cpu_count()`` would be a config read at import time.
+    """
+
+    hub_balance_slack: float = 1.25
+    cvrp_time_limit_s: float = 10.0
+    cvrp_solution_limit: int = 0
+    workers: int = 0
+
+    def __post_init__(self) -> None:
+        _require(
+            self.hub_balance_slack >= 1.0,
+            "hub_balance_slack must be at least 1.0: a cap below the even share is infeasible",
+        )
+        _require(self.cvrp_time_limit_s > 0.0, "cvrp_time_limit_s must be positive")
+        _require(
+            self.cvrp_solution_limit >= 0, "cvrp_solution_limit must be >= 0 (0 means unlimited)"
+        )
+        _require(self.workers >= 0, "workers must be >= 0 (0 means one per CPU)")
+
+
+@dataclass(frozen=True, slots=True)
 class GAConfig:
     """Genetic algorithm hyperparameters for the Stage 2 final-mile solver."""
 
@@ -357,5 +411,6 @@ class Config:
     cost: CostConfig = field(default_factory=CostConfig)
     traffic: TrafficConfig = field(default_factory=TrafficConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
+    stage1: Stage1Config = field(default_factory=Stage1Config)
     ga: GAConfig = field(default_factory=GAConfig)
     run: RunConfig = field(default_factory=RunConfig)
