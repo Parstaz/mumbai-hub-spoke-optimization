@@ -19,7 +19,18 @@ import dataclasses
 
 import pytest
 
-from src.config import CostConfig, FleetConfig, GeoConfig, ScheduleConfig
+from src.baseline.greedy import solve_baseline
+from src.config import (
+    Config,
+    CostConfig,
+    FleetConfig,
+    GeoConfig,
+    RunConfig,
+    ScheduleConfig,
+)
+from src.costs.matrix import CostMatrices, HaversineProvider
+from src.costs.traffic import TrafficModel
+from src.data.generate import generate_instance
 from src.data.instance import (
     Coordinate,
     Customer,
@@ -36,6 +47,7 @@ from src.scoring import (
     evaluate_solution,
     route_cost,
     route_window_outcome,
+    stage_cost,
 )
 from src.solution import Route, Solution
 from src.units import Rupees, Seconds
@@ -318,3 +330,86 @@ def test_metrics_is_frozen(tiny_instance: Instance) -> None:
     assert isinstance(metrics, Metrics)
     with pytest.raises(dataclasses.FrozenInstanceError):
         metrics.total_cost_inr = Rupees(0.0)  # type: ignore[misc]  # frozen-ness is the assertion
+
+
+def test_stage_cost_prices_one_stage_from_the_docstring_plan(tiny_instance: Instance) -> None:
+    """Stage 1 alone is ₹45 variable + ₹47.50 driver + ₹1000 fixed."""
+    stage = stage_cost((STAGE1_ROUTE,), tiny_instance, COSTS)
+    assert stage.breakdown.variable_inr == pytest.approx(45.0)
+    assert stage.breakdown.driver_inr == pytest.approx(47.50)
+    assert stage.breakdown.fixed_inr == pytest.approx(1000.0)
+    assert stage.breakdown.total_inr == pytest.approx(1092.50)
+    assert stage.stops == 1
+
+
+def test_stage_cost_does_not_validate_completeness(tiny_instance: Instance) -> None:
+    """Folding one stage of a two-stage plan is legitimate and must not read as scoring it.
+
+    ``evaluate_solution`` would reject this route tuple for leaving every customer unserved.
+    ``stage_cost`` is a fold, not a verdict, so it prices what it is given.
+    """
+    assert stage_cost((STAGE1_ROUTE,), tiny_instance, COSTS).breakdown.total_inr > 0.0
+    with pytest.raises(InfeasibleSolutionError, match="unserved"):
+        evaluate_solution(Solution((STAGE1_ROUTE,), ()), tiny_instance, COSTS)
+
+
+def test_stage_cost_over_an_empty_stage_is_zero(tiny_instance: Instance) -> None:
+    """A plan with no inbound tours costs nothing inbound, rather than raising on an empty fold."""
+    stage = stage_cost((), tiny_instance, COSTS)
+    assert stage.breakdown.total_inr == pytest.approx(0.0)
+    assert (stage.stops, stage.tw_violations, stage.tw_lateness_hr) == (0, 0, 0.0)
+
+
+def test_the_two_stages_summed_separately_reconcile_with_the_whole_plan(
+    tiny_instance: Instance,
+) -> None:
+    """What the CLI reports per stage must add up to what evaluate_solution reports overall.
+
+    Asserted with ``approx`` rather than ``==``: summing the stages separately regroups the
+    additions, and float addition is not associative. ``evaluate_solution`` deliberately folds
+    both stages as one concatenated tuple for exactly that reason — this test is what pins the
+    two views together at reporting precision.
+    """
+    solution = _reference_solution()
+    inbound = stage_cost(solution.stage1_routes, tiny_instance, COSTS)
+    outbound = stage_cost(solution.stage2_routes, tiny_instance, COSTS)
+    metrics = evaluate_solution(solution, tiny_instance, COSTS)
+
+    assert inbound.breakdown.total_inr + outbound.breakdown.total_inr == pytest.approx(
+        metrics.total_cost_inr
+    )
+    assert inbound.tw_violations + outbound.tw_violations == metrics.tw_violations
+    assert inbound.tw_lateness_hr + outbound.tw_lateness_hr == pytest.approx(metrics.tw_lateness_hr)
+
+
+def test_the_seed_42_baseline_figures_are_pinned() -> None:
+    """Characterisation test: the reported baseline column, to full float precision.
+
+    Not a hand-computed expectation like the rest of this module — 99 tours over 1116 nodes has
+    no closed form. Its job is different: this is the column every later step's improvement is
+    quoted against, so if a refactor of the scorer, the traffic model or the route builder moves
+    any digit here, every comparison made so far becomes suspect and the suite must say so
+    loudly rather than let the number drift.
+
+    The haversine provider is used because it needs no network and no cached artefact — the OSRM
+    matrix cache is gitignored, so a fresh clone could not reproduce the OSRM column. The OSRM
+    figures on this instance are ₹309.005154.../drop and ₹247,204.123.../total; they are held by
+    the ``make baseline`` verification step, not by this test.
+    """
+    config = Config(run=RunConfig(seed=42, use_osrm=False))
+    instance = generate_instance(config.geo, config.fleet, config.schedule, config.run.seed)
+    distance_m, duration_s = HaversineProvider(
+        circuity_factor=config.run.circuity_factor, speed_kmph=config.run.haversine_speed_kmph
+    ).matrix(instance.coordinates())
+    matrices = CostMatrices(distance_m=distance_m, duration_s=duration_s)
+
+    solution = solve_baseline(instance, matrices, TrafficModel.from_config(config.traffic))
+    metrics = evaluate_solution(solution, instance, config.cost)
+
+    assert metrics.total_cost_inr == 271625.7424255512
+    assert metrics.cost_per_drop_inr == 339.53217803193894
+    assert metrics.tw_violations == 116
+    assert metrics.tw_lateness_hr == 232.5128691345675
+    assert metrics.stops_per_hour == 2.099484357708594
+    assert metrics.vehicles_used == 99
+    assert (len(solution.stage1_routes), len(solution.stage2_routes)) == (50, 49)

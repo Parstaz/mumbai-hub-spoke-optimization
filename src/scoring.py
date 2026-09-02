@@ -6,6 +6,12 @@ OR-Tools reference all call it. A second scoring implementation — even a "quic
 fitness function — is a defect: the moment two exist, a reported improvement can come from the
 scorer rather than the solver, and the headline number stops meaning anything.
 
+:func:`stage_cost` is the fold underneath it, exposed because a stage-level pipeline step has one
+stage's tours and needs to report what they cost. It is not a second scoring path: it prices
+routes through the same :func:`route_cost` and performs no validation, so it cannot be mistaken
+for a verdict on a plan. :func:`evaluate_solution` calls it exactly once, over both stages
+concatenated.
+
 *Capacity never appears as a penalty.* It is a hard constraint enforced by construction upstream
 (infeasible arcs are never created in the split DAG). This module therefore *asserts* capacity
 rather than pricing it: a violation reaching here means a builder is broken, and it raises.
@@ -80,6 +86,22 @@ class WindowOutcome:
     def lateness_hr(self) -> float:
         """Total lateness in hours — the unit the penalty rate is quoted in."""
         return self.lateness_s / SECONDS_PER_HOUR
+
+
+@dataclass(frozen=True, slots=True)
+class StageCost:
+    """What one set of tours costs, and how it fared against its windows.
+
+    Holds only the quantities that need the cost model and the instance to compute. Distance,
+    duration, load and vehicle count are physical facts already owned by
+    :class:`~src.solution.Solution`; a caller wanting them for a single stage builds a
+    ``Solution`` over just those routes rather than having this type sum them a second time.
+    """
+
+    breakdown: CostBreakdown
+    stops: int
+    tw_violations: int
+    tw_lateness_hr: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +185,44 @@ def route_cost(route: Route, cost_config: CostConfig, window: WindowOutcome) -> 
     )
 
 
+def stage_cost(routes: tuple[Route, ...], instance: Instance, cost_config: CostConfig) -> StageCost:
+    """Fold :func:`route_cost` and :func:`route_window_outcome` over a set of tours.
+
+    The single aggregation site in the codebase, and the reason it takes a route tuple rather than
+    a :class:`~src.solution.Solution`: a stage-level pipeline step has one stage's tours and no
+    other, and the alternative to this function is that step adding up rupees itself. Splitting
+    the fold out is what keeps :func:`evaluate_solution` the only *scoring* path while still
+    letting a Stage 1 run report its inbound leg.
+
+    No validation happens here. Completeness and capacity are properties of a whole plan, so they
+    stay in :func:`evaluate_solution`; folding a partial plan is legitimate and must not be
+    mistaken for scoring one.
+
+    Args:
+        routes: The tours to aggregate, in the order they should be summed.
+        instance: Supplies the delivery windows lateness is measured against.
+        cost_config: Rates in INR.
+
+    Returns:
+        The summed cost breakdown, stop count and window outcome for ``routes``.
+    """
+    outcomes = tuple(route_window_outcome(route, instance) for route in routes)
+    breakdown = reduce(
+        operator.add,
+        (
+            route_cost(route, cost_config, outcome)
+            for route, outcome in zip(routes, outcomes, strict=True)
+        ),
+        CostBreakdown.zero(),
+    )
+    return StageCost(
+        breakdown=breakdown,
+        stops=sum(route.n_stops for route in routes),
+        tw_violations=sum(outcome.violations for outcome in outcomes),
+        tw_lateness_hr=sum(outcome.lateness_hr for outcome in outcomes),
+    )
+
+
 def evaluate_solution(solution: Solution, instance: Instance, cost_config: CostConfig) -> Metrics:
     """Score a plan. The single scoring path — every caller in the codebase comes through here.
 
@@ -182,18 +242,13 @@ def evaluate_solution(solution: Solution, instance: Instance, cost_config: CostC
     """
     _validate_structure(solution, instance)
 
-    outcomes = tuple(route_window_outcome(route, instance) for route in solution.all_routes)
-    breakdown = reduce(
-        operator.add,
-        (
-            route_cost(route, cost_config, outcome)
-            for route, outcome in zip(solution.all_routes, outcomes, strict=True)
-        ),
-        CostBreakdown.zero(),
-    )
+    # One fold over both stages concatenated, not one fold per stage added together. Float
+    # addition is not associative, so regrouping the sum could move the last bits of a reported
+    # figure; this way the arithmetic is bit-identical to summing the routes in plan order.
+    aggregate = stage_cost(solution.all_routes, instance, cost_config)
+    breakdown = aggregate.breakdown
 
     duration_hr = solution.total_duration_s / SECONDS_PER_HOUR
-    stops = sum(route.n_stops for route in solution.all_routes)
     fleet_capacity_kg = solution.vehicles_used * instance.fleet.vehicle_capacity_kg
 
     return Metrics(
@@ -204,9 +259,9 @@ def evaluate_solution(solution: Solution, instance: Instance, cost_config: CostC
         total_distance_km=solution.total_distance_m / METRES_PER_KM,
         total_duration_hr=duration_hr,
         vehicles_used=solution.vehicles_used,
-        tw_violations=sum(outcome.violations for outcome in outcomes),
-        tw_lateness_hr=sum(outcome.lateness_hr for outcome in outcomes),
-        stops_per_hour=stops / duration_hr,
+        tw_violations=aggregate.tw_violations,
+        tw_lateness_hr=aggregate.tw_lateness_hr,
+        stops_per_hour=aggregate.stops / duration_hr,
         capacity_utilisation=solution.total_load_kg / fleet_capacity_kg,
         breakdown=breakdown,
     )
