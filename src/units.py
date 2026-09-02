@@ -30,6 +30,12 @@ Latitude first. OSRM's URL grammar is ``lon,lat``; the swap happens once, inside
 that needs it, and nowhere else.
 """
 
+NodeArray = npt.NDArray[np.intp]
+"""Node ids as a NumPy index array, for indexing a matrix row in one operation."""
+
+DemandArray = npt.NDArray[np.float64]
+"""Mass in kilograms, aligned element-wise with a :data:`NodeArray`."""
+
 DistanceMatrix = npt.NDArray[np.float64]
 """An ``(n, n)`` matrix of road distances in metres, indexed by :data:`NodeId`."""
 
