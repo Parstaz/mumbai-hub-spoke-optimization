@@ -45,12 +45,13 @@ from src.scoring import (
     CostBreakdown,
     Metrics,
     evaluate_solution,
+    leg_cost,
     route_cost,
     route_window_outcome,
     stage_cost,
 )
 from src.solution import Route, Solution
-from src.units import Rupees, Seconds
+from src.units import Metres, Rupees, Seconds
 from tests.conftest import build_instance, make_route
 
 COSTS = CostConfig()
@@ -121,6 +122,64 @@ def test_route_cost_components(tiny_instance: Instance) -> None:
     assert breakdown.fixed_inr == pytest.approx(1000.0)
     assert breakdown.tw_penalty_inr == pytest.approx(0.0)
     assert breakdown.total_inr == pytest.approx(1185.0)
+
+
+def test_leg_cost_components() -> None:
+    """The same route priced from scalars: ₹90 variable, ₹95 driver, ₹1000 fixed, ₹125 late.
+
+    Half an hour late at ₹250/h is ₹125, which is the term :func:`route_cost` cannot exercise
+    from a hand-built route without also building the window it missed.
+    """
+    breakdown = leg_cost(Metres(10_000.0), Seconds(3_600.0), Seconds(1_800.0), COSTS)
+    assert breakdown.variable_inr == pytest.approx(90.0)
+    assert breakdown.driver_inr == pytest.approx(95.0)
+    assert breakdown.fixed_inr == pytest.approx(1000.0)
+    assert breakdown.tw_penalty_inr == pytest.approx(125.0)
+    assert breakdown.total_inr == pytest.approx(1310.0)
+
+
+def test_leg_cost_charges_the_fixed_vehicle_even_for_a_tour_that_goes_nowhere() -> None:
+    """Deploying a vehicle costs ``gamma`` whatever it then does.
+
+    This is the term that makes one more vehicle a decision the split DAG has to justify, so a
+    zero-distance zero-duration leg must still cost ₹1000 rather than nothing.
+    """
+    assert leg_cost(Metres(0.0), Seconds(0.0), Seconds(0.0), COSTS).total_inr == pytest.approx(
+        1000.0
+    )
+
+
+def test_route_cost_is_leg_cost_over_the_route_s_own_facts(tiny_instance: Instance) -> None:
+    """The identity Stage 2's arc pricer depends on, asserted component by component.
+
+    :mod:`src.stage2.pricing` prices arcs it never builds a ``Route`` for. That is only sound
+    while pricing scalars and pricing a route are the same arithmetic, so this pins the two
+    together under ``==`` rather than ``approx``: a reassociation that moved the last bits would
+    make the fast path a second cost model.
+    """
+    outcome = route_window_outcome(STAGE2_ROUTE, tiny_instance)
+    assert route_cost(STAGE2_ROUTE, COSTS, outcome) == leg_cost(
+        STAGE2_ROUTE.distance_m, STAGE2_ROUTE.duration_s, outcome.lateness_s, COSTS
+    )
+
+
+def test_leg_cost_rejects_nothing_and_prices_a_scaled_penalty_linearly() -> None:
+    """The adaptive penalty is a rate substitution, not a special case.
+
+    The GA prices arcs at a scaled ``tw_penalty_per_hour``; nothing here may know that, so
+    doubling the rate must simply double the lateness term and leave the rest alone.
+    """
+    base = leg_cost(Metres(10_000.0), Seconds(3_600.0), Seconds(1_800.0), COSTS)
+    scaled = leg_cost(
+        Metres(10_000.0),
+        Seconds(3_600.0),
+        Seconds(1_800.0),
+        dataclasses.replace(COSTS, tw_penalty_per_hour=COSTS.tw_penalty_per_hour * 2.0),
+    )
+    assert scaled.tw_penalty_inr == pytest.approx(base.tw_penalty_inr * 2.0)
+    assert scaled.variable_inr == base.variable_inr
+    assert scaled.driver_inr == base.driver_inr
+    assert scaled.fixed_inr == base.fixed_inr
 
 
 def test_evaluate_solution_matches_hand_computed_metrics(tiny_instance: Instance) -> None:

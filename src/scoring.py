@@ -37,7 +37,7 @@ from src.config import (
 from src.data.instance import Instance
 from src.exceptions import InfeasibleSolutionError
 from src.solution import Route, Solution
-from src.units import NodeId, Rupees, Seconds
+from src.units import Metres, NodeId, Rupees, Seconds
 
 
 def _require(condition: bool, message: str) -> None:
@@ -162,12 +162,40 @@ def route_window_outcome(route: Route, instance: Instance) -> WindowOutcome:
     return WindowOutcome(lateness_s=Seconds(lateness), violations=violations)
 
 
+def leg_cost(
+    distance_m: Metres, duration_s: Seconds, lateness_s: Seconds, cost_config: CostConfig
+) -> CostBreakdown:
+    """Price one vehicle-day from its physical outcome. The only site that produces rupees.
+
+    Takes scalars rather than a :class:`~src.solution.Route` because Stage 2's split DAG prices
+    candidate tours it will never build a route for: of the thousands one split evaluates, three
+    or four survive into the plan. Addressing the arithmetic by scalar is what lets
+    :mod:`src.stage2.pricing` reuse this function instead of copying it — the difference between
+    one cost model and two with a performance argument attached.
+
+    Args:
+        distance_m: Road distance driven, hub back to hub.
+        duration_s: Wall-clock seconds from leaving the hub to returning, service included.
+        lateness_s: Total seconds by which this tour missed its customers' windows.
+        cost_config: Rates in INR.
+
+    Returns:
+        The four cost components for this vehicle-day.
+    """
+    return CostBreakdown(
+        variable_inr=Rupees(cost_config.variable_per_km * distance_m / METRES_PER_KM),
+        driver_inr=Rupees(cost_config.driver_per_hour * duration_s / SECONDS_PER_HOUR),
+        fixed_inr=Rupees(cost_config.fixed_per_vehicle),
+        tw_penalty_inr=Rupees(cost_config.tw_penalty_per_hour * (lateness_s / SECONDS_PER_HOUR)),
+    )
+
+
 def route_cost(route: Route, cost_config: CostConfig, window: WindowOutcome) -> CostBreakdown:
-    """Price one tour.
+    """Price one tour, reading its physical outcome off the route.
 
     The window outcome is passed in rather than recomputed so that scoring measures lateness
-    exactly once per route, and so the arithmetic below is the only place in the codebase where
-    rupees are produced.
+    exactly once per route. The arithmetic itself lives in :func:`leg_cost`; this function is the
+    route-shaped way in, and the two cannot drift because there is only one of them.
 
     Args:
         route: The tour to price.
@@ -177,12 +205,7 @@ def route_cost(route: Route, cost_config: CostConfig, window: WindowOutcome) -> 
     Returns:
         The four cost components for this tour.
     """
-    return CostBreakdown(
-        variable_inr=Rupees(cost_config.variable_per_km * route.distance_m / METRES_PER_KM),
-        driver_inr=Rupees(cost_config.driver_per_hour * route.duration_s / SECONDS_PER_HOUR),
-        fixed_inr=Rupees(cost_config.fixed_per_vehicle),
-        tw_penalty_inr=Rupees(cost_config.tw_penalty_per_hour * window.lateness_hr),
-    )
+    return leg_cost(route.distance_m, route.duration_s, window.lateness_s, cost_config)
 
 
 def stage_cost(routes: tuple[Route, ...], instance: Instance, cost_config: CostConfig) -> StageCost:
