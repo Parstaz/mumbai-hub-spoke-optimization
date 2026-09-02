@@ -47,6 +47,7 @@ from src.data.instance import (
 )
 from src.exceptions import InfeasibleInstanceError, InfeasibleSolutionError
 from src.scoring import stage_cost
+from src.stage2.pricing import hub_pricing
 from src.stage2.split import Permutation, SplitContext, split
 from src.tour import RoutingContext, build_route
 from src.units import DistanceMatrix, NodeId, Seconds
@@ -129,15 +130,14 @@ def make_context(
     n_stops = len(demand_kg)
     instance = instance_with_customers(n_stops, windows or (None,) * n_stops)
     matrix = line_matrix(positions_m)
+    workload = HubWorkload(
+        hub_id=0,
+        hub_node=NodeId(0),
+        nodes=np.array([instance.customer_node(index) for index in range(n_stops)], dtype=np.intp),
+        demand_kg=np.array(demand_kg, dtype=np.float64),
+    )
     return SplitContext(
-        workload=HubWorkload(
-            hub_id=0,
-            hub_node=NodeId(0),
-            nodes=np.array(
-                [instance.customer_node(index) for index in range(n_stops)], dtype=np.intp
-            ),
-            demand_kg=np.array(demand_kg, dtype=np.float64),
-        ),
+        workload=workload,
         routing=RoutingContext(
             matrices=CostMatrices(distance_m=matrix, duration_s=matrix / METRES_PER_SECOND),
             traffic=FLAT,
@@ -145,9 +145,20 @@ def make_context(
             service_time_s=SERVICE_S,
             capacity_kg=CAPACITY_KG,
         ),
-        instance=instance,
+        pricing=hub_pricing(workload, instance),
         cost_config=cost_config or CostConfig(),
     )
+
+
+def scoring_instance(context: SplitContext) -> Instance:
+    """Rebuild the instance a context was assembled over, for the oracle to price through.
+
+    :class:`~src.stage2.split.SplitContext` stopped carrying an ``Instance`` when the arc pricer
+    landed — it holds the hub's windows instead, so a per-hub GA worker can be handed one without
+    the whole instance. The oracle still prices through :func:`~src.scoring.stage_cost`, which
+    needs an instance, and these fixtures are a pure function of their stop count and windows.
+    """
+    return instance_with_customers(len(context.workload.nodes), context.pricing.windows)
 
 
 def cluster_context(
@@ -188,7 +199,9 @@ def partition_cost_inr(
         build_route(context.workload, permutation[i:j], context.routing)
         for i, j in itertools.pairwise(cuts)
     )
-    return float(stage_cost(routes, context.instance, context.cost_config).breakdown.total_inr)
+    return float(
+        stage_cost(routes, scoring_instance(context), context.cost_config).breakdown.total_inr
+    )
 
 
 def stop_nodes(routes: tuple[tuple[NodeId, ...], ...]) -> tuple[NodeId, ...]:
@@ -415,7 +428,7 @@ def test_the_search_objective_agrees_with_the_scoring_fold_at_the_configured_rat
     """Priced at the configured rate, the DAG's total is the reported total. No second scorer."""
     context = cluster_context()
     plan = split((0, 1, 2, 3), context)
-    folded = stage_cost(plan.routes, context.instance, context.cost_config)
+    folded = stage_cost(plan.routes, scoring_instance(context), context.cost_config)
     assert plan.search_objective_inr == pytest.approx(folded.breakdown.total_inr)
 
 
@@ -431,7 +444,7 @@ def test_a_scaled_penalty_rate_makes_the_search_objective_diverge_from_reported_
     adaptive = CostConfig(tw_penalty_per_hour=CostConfig().tw_penalty_per_hour * 10.0)
     plan = split((0, 1, 2, 3), cluster_context(windows, adaptive))
 
-    reported = stage_cost(plan.routes, cluster_context(windows).instance, CostConfig())
+    reported = stage_cost(plan.routes, scoring_instance(cluster_context(windows)), CostConfig())
     assert plan.search_objective_inr > reported.breakdown.total_inr
 
 

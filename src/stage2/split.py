@@ -41,20 +41,28 @@ traffic arithmetic and no cost arithmetic of its own — the fixed vehicle charg
 trade one more vehicle against one longer tour is ``gamma`` inside ``route_cost``, not a term
 added here.
 
-**What that costs, measured.** A split is ``O(n x max_tour_length)`` arc weights, and each weight
-is a whole ``build_route`` and a whole ``route_cost``. On seed 42's Stage 2 hubs under OSRM
-matrices: **9.3 ms** per split at the median hub of 40 stops, **80 ms** at the largest of 250. At
-:class:`~src.config.GAConfig`'s defaults that is 1.4 s and 12.0 s per generation, so 14 minutes and
-2 hours respectively for one hub's 600 generations. The GA cannot run at those defaults against
-this pricer. That is a step 6 problem and is deliberately not solved here: this is the module whose
-errors are invisible, so it is written to be obviously right before it is written to be fast.
+**Which hub sizes this runs at.** A customer is served from the hub its shipment reached, so a
+Stage 2 workload comes from composing ``shipment.source_id`` through Stage 1's source-to-hub map —
+not from ``nearest_hub`` over customers, which is a geographic mapping no stage uses. On seed 42
+the largest Stage 2 hub is **236 stops** under the ``nearest`` assignment and **73** under
+``balanced``, against 250 for the geographic mapping. Total pricing work is the same either way,
+since it is set by the 800 customers and not by how they distribute; what the distribution moves is
+the makespan of the parallel per-hub solve, which the largest hub sets.
 
-When the optimisation comes — an arc-weight memo keyed by the stop subsequence, or an incremental
-prefix timeline exploiting that arrivals for ``hub -> p_i+1 .. p_j`` do not depend on what follows
-— its **price of admission is an equivalence test**: over random permutations the fast path must
-produce ``Route`` objects identical to :func:`~src.tour.build_route`'s and ``route_cost`` values
-identical to the shared path's, trip for trip. Without that test the optimisation is a second cost
-model with a performance argument attached, and §1.1's single scoring path is gone.
+**What that costs, measured.** A split is ``O(n x max_tour_length)`` arc weights. Pricing one by
+building its tour — a whole ``build_route`` and a whole ``route_cost`` — cost 16.8 µs.
+:mod:`src.stage2.pricing` prices it from a prefix timeline instead, and a split of that 236-stop
+hub, 4,530 arcs under OSRM matrices, runs in **10.3 ms against 76.3 ms**: a factor of 7.4, with
+every arc weight bit-identical. At :class:`~src.config.GAConfig`'s defaults that hub costs 15
+minutes for its 600 generations rather than 1.9 hours; the 73-stop hub the ``balanced`` assignment
+produces costs 4.5 minutes.
+
+**The equivalence test is the price of admission**, and ``tests/test_pricing.py`` is where it is
+paid: over random instances the fast path's arc weights must equal :func:`~src.tour.build_route`
+followed by :func:`~src.scoring.route_cost`, under ``==`` rather than a tolerance. Without that
+test the optimisation would be a second cost model with a performance argument attached, and §1.1's
+single scoring path would be gone. This module still builds the surviving tours the slow way,
+because three or four of them per split is not worth a second code path.
 """
 
 from __future__ import annotations
@@ -66,10 +74,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from src.config import CAPACITY_TOLERANCE_KG, CostConfig
-from src.data.instance import Instance
 from src.exceptions import InfeasibleSolutionError
-from src.scoring import route_cost, route_window_outcome
 from src.solution import Route
+from src.stage2.pricing import ArcPricer, HubPricing, ordered_tour
 from src.tour import RoutingContext, build_route
 from src.units import DemandArray, Rupees
 from src.workload import HubWorkload, require_servable
@@ -85,14 +92,20 @@ class SplitContext:
     Bundled so :func:`split` takes two arguments and the GA builds this once per hub rather than
     threading five parameters through its generation loop.
 
-    ``instance`` is here because :func:`~src.scoring.route_window_outcome` resolves delivery
-    windows through it, and measuring lateness a second way — off a precomputed window array, say
-    — would be exactly the duplicated logic :mod:`src.scoring` exists to prevent.
+    ``pricing`` carries the hub's delivery windows, resolved once by
+    :func:`~src.stage2.pricing.hub_pricing`. This field was the whole
+    :class:`~src.data.instance.Instance` until the arc pricer landed, on the argument that
+    measuring lateness off a precomputed window array would be exactly the duplicated logic
+    :mod:`src.scoring` exists to prevent. The equivalence test is what retires that argument:
+    lateness is still measured by :meth:`~src.data.instance.TimeWindow.lateness_s` and priced by
+    :func:`~src.scoring.leg_cost`, and the array decides only which window a stop has. Holding
+    windows rather than an instance is also what lets a per-hub GA worker be handed a frozen task
+    with no ``Instance`` in it, which §1.1 requires.
     """
 
     workload: HubWorkload
     routing: RoutingContext
-    instance: Instance
+    pricing: HubPricing
     cost_config: CostConfig
 
 
@@ -134,7 +147,7 @@ def split(permutation: Permutation, context: SplitContext) -> SplitPlan:
     Args:
         permutation: This hub's stops in visit order, as positions into
             ``context.workload.nodes`` — each position exactly once, no delimiters.
-        context: The hub's workload, the road network, the instance and the rates to price at.
+        context: The hub's workload, the road network, its windows and the rates to price at.
 
     Returns:
         The optimal partition as tours, with the shortest path's own total. An empty permutation
@@ -193,6 +206,10 @@ def _shortest_path(
     from a lower index to a higher one, so ``best_inr[i]`` is final before any arc leaving ``i``
     is considered.
 
+    Which arcs exist, and what each weighs, both come from
+    :class:`~src.stage2.pricing.ArcPricer`: it is the arc factory, so capacity — an arc that is
+    never created rather than one that is expensive — is enforced where arcs are made.
+
     Args:
         permutation: The visit order being partitioned.
         prefix_kg: Cumulative load along it, from :func:`_prefix_load_kg`.
@@ -204,15 +221,17 @@ def _shortest_path(
     n = len(permutation)
     best_inr = [0.0, *([math.inf] * n)]
     predecessor = [0] * (n + 1)
-    room_kg = context.routing.capacity_kg + CAPACITY_TOLERANCE_KG
+    pricer = ArcPricer(
+        tour=ordered_tour(permutation, context.workload, context.pricing, context.routing),
+        prefix_kg=prefix_kg,
+        room_kg=context.routing.capacity_kg + CAPACITY_TOLERANCE_KG,
+        routing=context.routing,
+        cost_config=context.cost_config,
+    )
 
     for i in range(n):
-        for j in range(i + 1, n + 1):
-            # Loads are non-negative, so once one arc out of i is too heavy every longer one is
-            # too. Breaking is what makes this O(n x max_tour_length) rather than O(n squared).
-            if prefix_kg[j] - prefix_kg[i] > room_kg:
-                break
-            candidate_inr = best_inr[i] + _arc_weight_inr(permutation[i:j], context)
+        for j, weight_inr in pricer.weights_from(i):
+            candidate_inr = best_inr[i] + weight_inr
             # Strictly cheaper, with i ascending, so ties fall to the lowest predecessor and two
             # splits of one permutation are the same plan rather than merely the same price.
             if candidate_inr < best_inr[j]:
@@ -220,19 +239,6 @@ def _shortest_path(
                 predecessor[j] = i
 
     return best_inr, predecessor
-
-
-def _arc_weight_inr(stops: Permutation, context: SplitContext) -> Rupees:
-    """Price one candidate tour: the weight of the arc that serves ``stops`` with one vehicle.
-
-    Every number here comes from the shared paths — the tour from :func:`~src.tour.build_route`
-    under the cumulative traffic model, the money from :func:`~src.scoring.route_cost`. The
-    lateness term is what makes the partition time-window aware, and the fixed vehicle charge
-    inside ``route_cost`` is what makes one more vehicle a decision the DAG has to justify.
-    """
-    route = build_route(context.workload, stops, context.routing)
-    window = route_window_outcome(route, context.instance)
-    return route_cost(route, context.cost_config, window).total_inr
 
 
 def _tours(
