@@ -342,6 +342,12 @@ class GAConfig:
     stagnation_limit: int = 75
     or_opt_max_segment_stops: int = 3
 
+    penalty_adapt_interval: int = 10
+    penalty_target_violation_rate: float = 0.10
+    penalty_step: float = 2.0
+    penalty_min_multiplier: float = 1.0
+    penalty_max_multiplier: float = 64.0
+
     def __post_init__(self) -> None:
         _require(
             self.population_size >= MIN_POPULATION_SIZE,
@@ -361,6 +367,23 @@ class GAConfig:
         _require(0.0 <= self.local_search_pct <= 1.0, "local_search_pct must be in [0, 1]")
         _require(self.local_search_max_passes > 0, "local_search_max_passes must be positive")
         _require(self.stagnation_limit > 0, "stagnation_limit must be positive")
+        _require(self.penalty_adapt_interval > 0, "penalty_adapt_interval must be positive")
+        _require(
+            0.0 <= self.penalty_target_violation_rate <= 1.0,
+            "penalty_target_violation_rate must be in [0, 1]",
+        )
+        _require(self.penalty_step > 1.0, "penalty_step must exceed 1.0 or the penalty cannot move")
+        # Below 1.0 the search would price lateness under the rate the plan is scored at, which is
+        # a different objective rather than weaker guidance. See src/stage2/penalty.py.
+        _require(
+            self.penalty_min_multiplier >= 1.0,
+            "penalty_min_multiplier must be at least 1.0: a search that under-prices lateness "
+            "optimises against a cheaper world than evaluate_solution reports",
+        )
+        _require(
+            self.penalty_max_multiplier >= self.penalty_min_multiplier,
+            "penalty_max_multiplier must be at least penalty_min_multiplier",
+        )
         _require(self.or_opt_max_segment_stops > 0, "or_opt_max_segment_stops must be positive")
 
 
