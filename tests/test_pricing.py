@@ -42,8 +42,9 @@ from src.data.instance import (
     Source,
     TimeWindow,
 )
+from src.exceptions import InfeasibleSolutionError
 from src.scoring import route_cost, route_window_outcome
-from src.stage2.pricing import ArcPricer, hub_pricing, ordered_tour
+from src.stage2.pricing import TourPricer, hub_pricing, ordered_tour
 from src.stage2.split import Permutation
 from src.tour import RoutingContext, build_route
 from src.units import DemandArray, NodeId, Rupees, Seconds
@@ -157,17 +158,17 @@ def priced_arcs(
     cost_config: CostConfig,
 ) -> dict[tuple[int, int], Rupees]:
     """Every arc the pricer yields for ``permutation``, keyed by ``(start, end)``."""
-    pricer = ArcPricer(
+    pricer = TourPricer(
         tour=ordered_tour(permutation, workload, hub_pricing(workload, instance), routing),
-        prefix_kg=prefix_load_kg(permutation, workload.demand_kg),
-        room_kg=routing.capacity_kg + CAPACITY_TOLERANCE_KG,
         routing=routing,
         cost_config=cost_config,
     )
+    prefix_kg = prefix_load_kg(permutation, workload.demand_kg)
+    room_kg = routing.capacity_kg + CAPACITY_TOLERANCE_KG
     return {
         (start, end): weight
         for start in range(len(permutation))
-        for end, weight in pricer.weights_from(start)
+        for end, weight in pricer.weights_from(start, prefix_kg, room_kg)
     }
 
 
@@ -254,6 +255,64 @@ def test_the_arc_set_is_every_run_one_vehicle_can_carry(
         for end in range(start + 1, min(start + per_vehicle, len(permutation)) + 1)
     }
     assert set(priced_arcs(permutation, workload, instance, routing, CostConfig())) == expected
+
+
+# --------------------------------------------------------------------------------------------
+# Pricing one whole tour, which is what the local search evaluates a move with
+# --------------------------------------------------------------------------------------------
+
+
+def whole_tour_weight(
+    permutation: Permutation,
+    workload: HubWorkload,
+    instance: Instance,
+    routing: RoutingContext,
+    cost_config: CostConfig,
+) -> Rupees:
+    """Price the whole permutation as one vehicle's work."""
+    return TourPricer(
+        tour=ordered_tour(permutation, workload, hub_pricing(workload, instance), routing),
+        routing=routing,
+        cost_config=cost_config,
+    ).whole_weight()
+
+
+@settings(max_examples=100, deadline=None)
+@given(case=pricing_case(), cost_config=st.sampled_from(RATE_SETS))
+def test_whole_weight_equals_the_shared_path(
+    case: tuple[Permutation, HubWorkload, Instance, RoutingContext], cost_config: CostConfig
+) -> None:
+    """Closing once must give exactly what closing at every stop and taking the last one gives.
+
+    The local search prices hundreds of candidate reorderings per route, so it closes once rather
+    than building a family of prefixes to read the end of. That shortcut is only safe while the two
+    agree to the last bit, which is what this pins.
+    """
+    permutation, workload, instance, routing = case
+    expected = oracle_weight(permutation, workload, instance, routing, cost_config)
+    assert whole_tour_weight(permutation, workload, instance, routing, cost_config) == expected
+
+
+def test_whole_weight_agrees_with_the_arc_that_covers_every_stop() -> None:
+    """The whole tour is also an arc of the DAG, when one vehicle can carry the lot."""
+    workload, instance, routing = single_stop_case((None, None, None), np.array([PARCEL_KG] * 3))
+    permutation = (2, 0, 1)
+    arcs = priced_arcs(permutation, workload, instance, routing, CostConfig())
+    assert whole_tour_weight(permutation, workload, instance, routing, CostConfig()) == arcs[(0, 3)]
+
+
+def test_whole_weight_of_a_single_stop_tour() -> None:
+    """Hub, one stop, hub — the smallest thing the local search can be handed."""
+    workload, instance, routing = single_stop_case((None,), np.array([PARCEL_KG]))
+    expected = oracle_weight((0,), workload, instance, routing, CostConfig())
+    assert whole_tour_weight((0,), workload, instance, routing, CostConfig()) == expected
+
+
+def test_whole_weight_refuses_a_tour_with_no_stops() -> None:
+    """A deployed vehicle carries something. ``Route`` refuses the same thing, loudly."""
+    workload, instance, routing = single_stop_case((None,), np.array([PARCEL_KG]))
+    with pytest.raises(InfeasibleSolutionError, match="not a tour"):
+        whole_tour_weight((), workload, instance, routing, CostConfig())
 
 
 # --------------------------------------------------------------------------------------------

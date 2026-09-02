@@ -34,12 +34,12 @@ passed before the DAG is walked, so every single-stop arc ``(i, i + 1)`` exists 
 reachable from node ``0`` along the singleton chain. No unreachable node is possible, which is why
 nothing below guards against one.
 
-**Arc weights come from the shared paths and nowhere else.** A weight is
-:func:`~src.tour.build_route` for the physical tour, then :func:`~src.scoring.route_window_outcome`
-and :func:`~src.scoring.route_cost` for the money. This module contains no distance arithmetic, no
-traffic arithmetic and no cost arithmetic of its own — the fixed vehicle charge that lets the DAG
-trade one more vehicle against one longer tour is ``gamma`` inside ``route_cost``, not a term
-added here.
+**Arc weights come from :mod:`src.stage2.pricing` and nowhere else.** This module contains no
+distance arithmetic, no traffic arithmetic and no cost arithmetic of its own — the fixed vehicle
+charge that lets the DAG trade one more vehicle against one longer tour is ``gamma`` inside
+:func:`~src.scoring.leg_cost`, not a term added here. The pricer in turn holds itself to the shared
+path by an equivalence test, so a weight is still what :func:`~src.tour.build_route` followed by
+:func:`~src.scoring.route_cost` would have said, to the last bit.
 
 **Which hub sizes this runs at.** A customer is served from the hub its shipment reached, so a
 Stage 2 workload comes from composing ``shipment.source_id`` through Stage 1's source-to-hub map —
@@ -76,7 +76,7 @@ import numpy as np
 from src.config import CAPACITY_TOLERANCE_KG, CostConfig
 from src.exceptions import InfeasibleSolutionError
 from src.solution import Route
-from src.stage2.pricing import ArcPricer, HubPricing, ordered_tour
+from src.stage2.pricing import HubPricing, TourPricer, ordered_tour
 from src.tour import RoutingContext, build_route
 from src.units import DemandArray, Rupees
 from src.workload import HubWorkload, require_servable
@@ -127,6 +127,13 @@ class SplitPlan:
     """
 
     routes: tuple[Route, ...]
+    tours: tuple[Permutation, ...]
+    """The same partition in chromosome space: each vehicle's run of positions, in plan order.
+
+    Concatenating these reproduces the permutation that was split, which is what makes the memetic
+    local search's write-back well defined — see :mod:`src.stage2.local_search`.
+    """
+
     search_objective_inr: Rupees
 
 
@@ -164,8 +171,10 @@ def split(permutation: Permutation, context: SplitContext) -> SplitPlan:
 
     prefix_kg = _prefix_load_kg(permutation, context.workload.demand_kg)
     best_inr, predecessor = _shortest_path(permutation, prefix_kg, context)
+    tours = _partition(predecessor, permutation)
     return SplitPlan(
-        routes=_tours(predecessor, permutation, context),
+        routes=tuple(build_route(context.workload, stops, context.routing) for stops in tours),
+        tours=tours,
         search_objective_inr=Rupees(best_inr[-1]),
     )
 
@@ -207,8 +216,8 @@ def _shortest_path(
     is considered.
 
     Which arcs exist, and what each weighs, both come from
-    :class:`~src.stage2.pricing.ArcPricer`: it is the arc factory, so capacity — an arc that is
-    never created rather than one that is expensive — is enforced where arcs are made.
+    :class:`~src.stage2.pricing.TourPricer`: capacity decides how far a pass may run, so an
+    over-capacity arc is never priced rather than priced and rejected.
 
     Args:
         permutation: The visit order being partitioned.
@@ -221,16 +230,15 @@ def _shortest_path(
     n = len(permutation)
     best_inr = [0.0, *([math.inf] * n)]
     predecessor = [0] * (n + 1)
-    pricer = ArcPricer(
+    pricer = TourPricer(
         tour=ordered_tour(permutation, context.workload, context.pricing, context.routing),
-        prefix_kg=prefix_kg,
-        room_kg=context.routing.capacity_kg + CAPACITY_TOLERANCE_KG,
         routing=context.routing,
         cost_config=context.cost_config,
     )
+    room_kg = context.routing.capacity_kg + CAPACITY_TOLERANCE_KG
 
     for i in range(n):
-        for j, weight_inr in pricer.weights_from(i):
+        for j, weight_inr in pricer.weights_from(i, prefix_kg, room_kg):
             candidate_inr = best_inr[i] + weight_inr
             # Strictly cheaper, with i ascending, so ties fall to the lowest predecessor and two
             # splits of one permutation are the same plan rather than merely the same price.
@@ -241,20 +249,16 @@ def _shortest_path(
     return best_inr, predecessor
 
 
-def _tours(
-    predecessor: list[int], permutation: Permutation, context: SplitContext
-) -> tuple[Route, ...]:
-    """Rebuild the chosen partition's tours by walking the predecessors back from node ``n``.
+def _partition(predecessor: list[int], permutation: Permutation) -> tuple[Permutation, ...]:
+    """Read the chosen partition off the predecessors, walking back from node ``n``.
 
-    Rebuilt rather than cached during the pass: keeping the winning ``Route`` for every node would
-    hold ``n`` tours alive to return the three or four that survive, and the rebuild is one
-    :func:`~src.tour.build_route` per deployed vehicle against the thousands the pass already did.
+    Returned in chromosome space — runs of positions — rather than as tours, so the one caller
+    that wants the plan back as a chromosome does not have to invert
+    :func:`~src.tour.build_route` to get it. Building the tours is then one ``build_route`` per
+    deployed vehicle, against the thousands the pass already did.
     """
     cuts = [len(permutation)]
     while cuts[-1] > 0:
         cuts.append(predecessor[cuts[-1]])
     cuts.reverse()
-    return tuple(
-        build_route(context.workload, permutation[i:j], context.routing)
-        for i, j in itertools.pairwise(cuts)
-    )
+    return tuple(permutation[i:j] for i, j in itertools.pairwise(cuts))

@@ -16,13 +16,13 @@ Measured on seed 42's largest Stage 2 hub under OSRM matrices, 236 stops and 4,5
 **78.0 ms → 9.9 ms, a factor of 7.9, with all 4,530 arc weights bit-identical.** A prototype that
 inlined the rate arithmetic and read window ends off a float array reached 8.3×; routing money
 through :func:`~src.scoring.leg_cost` and lateness through
-:meth:`~src.data.instance.TimeWindow.lateness_s` costs that difference and is worth it. The
-alternative
-considered was an arc-weight memo keyed by the stop subsequence. It was measured and rejected: hit
-rates run 9.0% across 150 independent permutations, 52% for an OX child against both parents and
-74% after a single or-opt move — 2–4×, for a 173k-key working set per hub. A memo exploits
-redundancy *between* chromosomes, which depends on the population converging; this exploits
-redundancy *inside* one split, which is structural.
+:meth:`~src.data.instance.TimeWindow.lateness_s` costs that difference and is worth it.
+
+The alternative considered was an arc-weight memo keyed by the stop subsequence. It was measured
+and rejected: hit rates run 9.0% across 150 independent permutations, 52% for an OX child against
+both parents and 74% after a single or-opt move — 2–4×, for a 173k-key working set per hub. A memo
+exploits redundancy *between* chromosomes, which depends on the population converging; this
+exploits redundancy *inside* one split, which is structural.
 
 **Why this is not a second cost model.** Nothing here computes rupees, distance or travel time of
 its own. Money comes from :func:`~src.scoring.leg_cost`, the same arithmetic
@@ -53,6 +53,7 @@ import numpy.typing as npt
 
 from src.config import CostConfig
 from src.data.instance import Instance, TimeWindow
+from src.exceptions import InfeasibleSolutionError
 from src.scoring import leg_cost
 from src.tour import RoutingContext
 from src.units import DemandArray, Metres, NodeId, Rupees, Seconds
@@ -158,47 +159,104 @@ def ordered_tour(
 
 
 @dataclass(frozen=True, slots=True)
-class ArcPricer:
-    """The arc factory for one permutation: which arcs exist, and what each one weighs.
+class TourPricer:
+    """Prices vehicle tours over one permutation, off a single forward timeline.
 
-    Capacity lives here because this is where arcs are created, and CLAUDE.md §1.1 makes capacity
-    structural rather than penalised — an arc whose load exceeds one vehicle is not expensive, it
-    is never yielded.
+    Two callers ask two different questions of the same walk. The split DAG wants **every prefix**
+    from a starting point — one arc per stop it might end at — so it closes the tour at each step.
+    The memetic local search wants **one whole tour**, a candidate reordering of a route split
+    already chose, so it closes once at the end. Sharing :meth:`_advance` between them is what
+    keeps the second from becoming a third cost path: the local search runs inside a per-hub worker
+    that has no ``Instance``, so it cannot fall back on
+    :func:`~src.scoring.route_window_outcome` and would otherwise need its own lateness loop.
+
+    Capacity is not a field here. It belongs to the DAG question — which arcs exist — and not to
+    pricing a tour the caller already knows one vehicle can carry.
     """
 
     tour: OrderedTour
-    prefix_kg: DemandArray
-    room_kg: float
     routing: RoutingContext
     cost_config: CostConfig
 
-    def weights_from(self, start: int) -> Iterator[tuple[int, Rupees]]:
-        """Price every arc leaving DAG node ``start``, cheapest pass first.
+    def weights_from(
+        self, start: int, prefix_kg: DemandArray, room_kg: float
+    ) -> Iterator[tuple[int, Rupees]]:
+        """Price every arc leaving DAG node ``start``, ``end`` ascending.
 
         Yields ``(end, weight)`` for one vehicle serving permutation positions ``start..end-1``,
-        with ``end`` ascending, stopping at the first load one vehicle cannot carry. Loads are
-        non-negative, so every longer arc is over capacity too — the same reason
+        stopping before the first load one vehicle cannot carry. Loads are non-negative, so every
+        longer arc is over capacity too — the same reason
         :func:`~src.stage2.split.split`'s DAG is O(n × max_tour_length) rather than O(n²).
+
+        The reachable end is found first, by scalar arithmetic over ``prefix_kg`` alone, so no leg
+        of an infeasible arc is ever driven. CLAUDE.md §1.1 makes capacity structural: an
+        over-capacity arc is not expensive here, it is never yielded.
 
         Args:
             start: DAG node to leave from: the number of stops already served.
+            prefix_kg: Cumulative load along the permutation, with a leading zero.
+            room_kg: What one vehicle can carry, plus the float tolerance.
 
         Yields:
             The arc's far node and its weight in rupees.
+        """
+        last = start
+        while last < len(self.tour.windows) and prefix_kg[last + 1] - prefix_kg[start] <= room_kg:
+            last += 1
+
+        legs_m = self._leg_buffer(start)
+        for stop, arrival_s, lateness_s in self._advance(start, last, legs_m):
+            yield (
+                stop + 1,
+                self._closed_weight(legs_m, stop - start + 1, stop, arrival_s, lateness_s),
+            )
+
+    def whole_weight(self) -> Rupees:
+        """Price the entire tour as one vehicle's work, closing once rather than at every stop.
+
+        What the local search evaluates a candidate move with. Closing once matters: a 2-opt pass
+        over a 20-stop route proposes 190 reorderings, and pricing each as a family of 20 prefixes
+        to read the last would cost twenty times what the answer needs.
+
+        Raises:
+            InfeasibleSolutionError: If the tour has no stops. A deployed vehicle carries
+                something — :class:`~src.solution.Route` refuses the same thing.
+        """
+        n_stops = len(self.tour.windows)
+        if n_stops == 0:
+            raise InfeasibleSolutionError("a tour with no stops is not a tour")
+
+        legs_m = self._leg_buffer(0)
+        stop, arrival_s, lateness_s = 0, 0.0, 0.0
+        for stop, arrival_s, lateness_s in self._advance(0, n_stops, legs_m):  # noqa: B007
+            pass
+        return self._closed_weight(legs_m, n_stops, stop, arrival_s, lateness_s)
+
+    def _leg_buffer(self, start: int) -> Legs:
+        """A scratch vector for one pass's leg distances, with the hub-to-first leg already in it.
+
+        Reused across every close in one pass, which is why the closing leg is written past the
+        stops served so far: the next stop's chain leg overwrites it.
+        """
+        legs_m: Legs = np.empty(len(self.tour.windows) - start + 1, dtype=np.float64)
+        legs_m[0] = self.tour.out_m[start]
+        return legs_m
+
+    def _advance(self, start: int, last: int, legs_m: Legs) -> Iterator[tuple[int, float, float]]:
+        """Walk the timeline over stops ``start..last-1``, filling ``legs_m`` as it goes.
+
+        Yields the running clock at each stop: the arrival there, and the lateness accumulated
+        from ``start`` to there. Neither depends on where the tour eventually closes, which is the
+        whole reason one pass can answer for every arc leaving ``start``.
         """
         travel = self.routing.traffic.travel_time_with_traffic
         service_s = float(self.routing.service_time_s)
         start_s = float(self.routing.start_time_s)
         tour = self.tour
 
-        legs_m: Legs = np.empty(len(tour.windows) - start + 1, dtype=np.float64)
-        legs_m[0] = tour.out_m[start]
         arrival_s = start_s + travel(Seconds(float(tour.out_s[start])), Seconds(start_s))
         lateness_s = 0.0
-
-        for stop in range(start, len(tour.windows)):
-            if self.prefix_kg[stop + 1] - self.prefix_kg[start] > self.room_kg:
-                return
+        for stop in range(start, last):
             if stop > start:
                 departure_s = arrival_s + service_s
                 leg_s = Seconds(float(tour.chain_s[stop - 1]))
@@ -207,10 +265,7 @@ class ArcPricer:
             window = tour.windows[stop]
             if window is not None:
                 lateness_s += window.lateness_s(Seconds(arrival_s))
-            yield (
-                stop + 1,
-                self._closed_weight(legs_m, stop - start + 1, stop, arrival_s, lateness_s),
-            )
+            yield stop, arrival_s, lateness_s
 
     def _closed_weight(
         self, legs_m: Legs, served: int, stop: int, arrival_s: float, lateness_s: float
