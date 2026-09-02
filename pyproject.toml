@@ -74,4 +74,12 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # ortools 9.15 is built with SWIG, whose SwigPyPacked, SwigPyObject and swigvarlink types
+    # carry no __module__ attribute — which Python 3.14 deprecates. Under `error` the warning is
+    # raised from inside _pywrapcp's module init, where an exception cannot be propagated, and
+    # the interpreter segfaults during collection instead of failing a test. Not ours to fix, and
+    # narrowed to this exact message so it cannot hide a warning from our own code.
+    "ignore:builtin type \\w*[Ss]wig\\w* has no __module__ attribute:DeprecationWarning",
+]
