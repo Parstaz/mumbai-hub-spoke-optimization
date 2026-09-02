@@ -51,6 +51,11 @@ class AssignmentStrategy(Protocol):
     shape and no state, and structural typing says exactly that. Two of them exist —
     :func:`unconstrained` and :func:`capacity_balanced` — which is what step 7's ablation needs
     and the only reason this abstraction is here at all.
+
+    The four arguments are positional-only. Strategies are always invoked positionally, and
+    without the ``/`` a conforming implementation would additionally have to match these
+    *parameter names* — which :func:`unconstrained` cannot, since it marks the argument it
+    ignores with a leading underscore.
     """
 
     def __call__(
@@ -59,6 +64,7 @@ class AssignmentStrategy(Protocol):
         stop_nodes: NodeArray,
         distance_m: DistanceMatrix,
         max_stops_per_hub: int,
+        /,
     ) -> NodeArray:
         """Return a hub id per entry of ``stop_nodes``."""
 

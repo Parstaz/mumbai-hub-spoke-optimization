@@ -39,7 +39,7 @@ ignore = [
     "D107",  # dataclass __init__ is generated; the class docstring covers it
 ]
 # Typography used deliberately in reports and docstrings: ranges, dimensions, coordinates.
-allowed-confusables = ["–", "×", "°"]
+allowed-confusables = ["–", "×", "°", "σ"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10

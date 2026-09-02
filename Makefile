@@ -20,7 +20,7 @@ OSRM_PBF := $(OSRM_DIR)/maharashtra-latest.osm.pbf
 # indistinguishable from a download to anything that does not check what it received.
 OSRM_EXTRACT_URL := https://download.openstreetmap.fr/extracts/asia/india/maharashtra-latest.osm.pbf
 
-.PHONY: data providers baseline osrm osrm-up osrm-down lint format check types unit cov test
+.PHONY: data providers baseline stage1 osrm osrm-up osrm-down lint format check types unit cov test
 
 ## generate a seeded synthetic instance, print summary stats, render the scatter plot
 data:
@@ -33,6 +33,10 @@ providers:
 ## greedy nearest-neighbour benchmark on the seeded instance, with its full metrics table
 baseline:
 	$(PY) -m src.cli.run_baseline --seed $(SEED) --osrm-url http://127.0.0.1:$(OSRM_PORT)
+
+## stage 1 inbound leg: greedy baseline vs the CVRP under each hub assignment strategy
+stage1:
+	$(PY) -m src.cli.run_stage1 --seed $(SEED) --osrm-url http://127.0.0.1:$(OSRM_PORT)
 
 ## one-time OSRM setup: download the extract, then extract -> partition -> customize -> routed.
 ## Takes 15-30 minutes and roughly 4 GB of RAM; the artefacts persist in $(OSRM_DIR).
