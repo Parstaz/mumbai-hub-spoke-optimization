@@ -354,7 +354,7 @@ def test_a_source_holding_more_than_a_vehicle_is_rejected() -> None:
     # All 21 shipments — 787.5 kg — wait at the single source, over the 750 kg vehicle.
     instance = one_hub_instance(21)
 
-    with pytest.raises(InfeasibleInstanceError, match="never splits it across vehicles"):
+    with pytest.raises(InfeasibleInstanceError, match="no stop is ever split across vehicles"):
         solve_baseline(instance, haversine_matrices(instance), traffic_model())
 
 

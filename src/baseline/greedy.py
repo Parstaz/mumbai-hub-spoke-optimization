@@ -81,7 +81,7 @@ def solve_baseline(instance: Instance, matrices: CostMatrices, traffic: TrafficM
         InfeasibleInstanceError: If a single source holds more mass than one vehicle can carry.
     """
     source_demand_kg, customer_demand_kg = stage_demands(instance)
-    require_servable(source_demand_kg, instance.fleet.vehicle_capacity_kg)
+    require_servable(source_demand_kg, instance.fleet.vehicle_capacity_kg, "source")
 
     hub_nodes = node_array(instance.hub_node(hub.hub_id) for hub in instance.hubs)
     source_nodes = node_array(instance.source_node(src.source_id) for src in instance.sources)

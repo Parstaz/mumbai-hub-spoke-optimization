@@ -82,26 +82,37 @@ def test_every_customer_owes_exactly_one_shipment() -> None:
 
 def test_a_source_holding_exactly_one_vehicle_load_is_servable() -> None:
     """The boundary is inclusive: a full vehicle is a legal vehicle."""
-    require_servable(np.array([CAPACITY_KG], dtype=np.float64), CAPACITY_KG)
+    require_servable(np.array([CAPACITY_KG], dtype=np.float64), CAPACITY_KG, "source")
 
 
 def test_a_source_holding_one_vehicle_load_plus_a_gram_is_rejected() -> None:
     """One gram over capacity is infeasible, because no solver here splits a stop."""
-    with pytest.raises(InfeasibleInstanceError, match="never splits it across vehicles"):
-        require_servable(np.array([CAPACITY_KG + 0.001], dtype=np.float64), CAPACITY_KG)
+    with pytest.raises(InfeasibleInstanceError, match="no stop is ever split across vehicles"):
+        require_servable(np.array([CAPACITY_KG + 0.001], dtype=np.float64), CAPACITY_KG, "source")
 
 
 def test_the_rejection_message_names_the_worst_source_and_the_capacity() -> None:
     """A refusal has to say what it refused, or it is indistinguishable from a bug."""
     demand: DemandArray = np.array([CAPACITY_KG, 900.0, 1200.0], dtype=np.float64)
     with pytest.raises(InfeasibleInstanceError, match=r"2 source\(s\).*worst 1200.0 kg.*750.0 kg"):
-        require_servable(demand, CAPACITY_KG)
+        require_servable(demand, CAPACITY_KG, "source")
+
+
+def test_the_rejection_message_names_the_stop_kind_the_caller_gave_it() -> None:
+    """Stage 2 checks customers, so a refusal must not say "source" and cite the wrong solver.
+
+    The noun is a required argument precisely so this cannot drift: the message is the only place
+    a reader learns what was refused.
+    """
+    demand: DemandArray = np.array([900.0], dtype=np.float64)
+    with pytest.raises(InfeasibleInstanceError, match=r"1 customer\(s\) hold more than one"):
+        require_servable(demand, CAPACITY_KG, "customer")
 
 
 def test_a_float_sum_landing_a_microgram_over_capacity_is_still_servable() -> None:
     """Twenty 37.5 kg parcels is exactly a vehicle; float addition must not make it illegal."""
     accumulated = float(np.array([SHIPMENT_KG] * 20, dtype=np.float64).sum())
-    require_servable(np.array([accumulated], dtype=np.float64), CAPACITY_KG)
+    require_servable(np.array([accumulated], dtype=np.float64), CAPACITY_KG, "source")
 
 
 def test_node_array_indexes_the_flat_node_space_through_the_instance_accessors() -> None:

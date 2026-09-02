@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
@@ -70,19 +71,40 @@ def _demand_kg(n_ids: int, ids: Sequence[int], sizes: Sequence[float]) -> Demand
     return totals
 
 
-def require_servable(source_demand_kg: DemandArray, capacity_kg: float) -> None:
-    """Reject an instance whose sources cannot be emptied one vehicle-load at a time.
+def require_servable(
+    demand_kg: DemandArray, capacity_kg: float, stop_kind: Literal["source", "customer"]
+) -> None:
+    """Reject an instance whose stops cannot be emptied one vehicle-load at a time.
 
-    Only sources are checked. A customer's demand is a single shipment, and the instance already
-    guarantees at construction both that every shipment fits a vehicle and that each customer is
-    the destination of exactly one — so the final-mile equivalent of this check can never fire.
+    Both stages call this, over their own stops: Stage 1 over the sources it collects from, Stage 2
+    over one hub's customers before :func:`~src.stage2.split.split` builds its DAG. Stage 2's call
+    is load-bearing rather than belt-and-braces — the split DAG reaches its terminal node only
+    because every single-stop arc exists, and a stop no vehicle can lift is exactly the arc that
+    would be missing. Passing here is what guarantees the shortest path has a finite optimum.
+
+    On a generated instance the customer side cannot fire: every shipment is checked against
+    capacity when the instance is built, and each customer is the destination of exactly one. That
+    is a property of the current generator and of uniform shipment sizes, not of the rule, which is
+    why the check is made rather than assumed.
+
+    ``stop_kind`` has no default on purpose. It is the noun in the refusal message, and a caller
+    that omitted it would name the wrong kind of stop in the one place a reader looks to find out
+    what was refused.
+
+    Args:
+        demand_kg: Mass waiting at each stop, aligned with the stop list under test.
+        capacity_kg: What one vehicle can carry.
+        stop_kind: What the stops in ``demand_kg`` are, for the message.
+
+    Raises:
+        InfeasibleInstanceError: If any stop holds more mass than one vehicle can carry.
     """
-    over = np.flatnonzero(source_demand_kg > capacity_kg + CAPACITY_TOLERANCE_KG)
+    over = np.flatnonzero(demand_kg > capacity_kg + CAPACITY_TOLERANCE_KG)
     if over.size:
         raise InfeasibleInstanceError(
-            f"{over.size} source(s) hold more than one vehicle can carry "
-            f"(worst {source_demand_kg[over].max():.1f} kg against {capacity_kg:.1f} kg capacity); "
-            f"the greedy baseline visits each stop once and never splits it across vehicles"
+            f"{over.size} {stop_kind}(s) hold more than one vehicle can carry "
+            f"(worst {demand_kg[over].max():.1f} kg against {capacity_kg:.1f} kg capacity); "
+            f"no stop is ever split across vehicles"
         )
 
 

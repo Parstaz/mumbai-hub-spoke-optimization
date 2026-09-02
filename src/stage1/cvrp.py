@@ -193,7 +193,7 @@ def _assign(
     have visited.
     """
     source_demand_kg, _ = stage_demands(instance)
-    require_servable(source_demand_kg, instance.fleet.vehicle_capacity_kg)
+    require_servable(source_demand_kg, instance.fleet.vehicle_capacity_kg, "source")
 
     hub_nodes = node_array(instance.hub_node(hub.hub_id) for hub in instance.hubs)
     active = np.flatnonzero(source_demand_kg > 0.0)

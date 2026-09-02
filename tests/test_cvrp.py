@@ -157,7 +157,7 @@ def test_a_stop_holding_more_than_one_vehicle_load_is_rejected() -> None:
     ``src/workload.py``, so step 8 cannot end up comparing solvers under different constraints.
     """
     instance = instance_with([0] * 21, capacity_kg=750.0)
-    with pytest.raises(InfeasibleInstanceError, match="never splits it across vehicles"):
+    with pytest.raises(InfeasibleInstanceError, match="no stop is ever split across vehicles"):
         solve(instance)
 
 
