@@ -227,7 +227,7 @@ A step is complete only when all of the following hold:
 - [x] 2 — cost layer: chunked OSRM matrix, parquet cache, cumulative traffic bands
 - [x] 3 — greedy baseline
 - [x] 4 — Stage 1: hub assignment (nearest / min-cost-flow) + per-hub CVRP
-- [ ] 5 — split procedure + property tests ← correctness linchpin; must pass before step 6
+- [x] 5 — split procedure + property tests
 - [ ] 6 — Stage 2 GA: OX, or-opt, adaptive penalty, memetic 2-opt
 - [ ] 7 — ablation: with vs without local search
 - [ ] 8 — OR-Tools reference solve
