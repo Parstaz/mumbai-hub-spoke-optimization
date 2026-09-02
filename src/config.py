@@ -317,7 +317,19 @@ class Stage1Config:
 
 @dataclass(frozen=True, slots=True)
 class GAConfig:
-    """Genetic algorithm hyperparameters for the Stage 2 final-mile solver."""
+    """Genetic algorithm hyperparameters for the Stage 2 final-mile solver.
+
+    ``generations`` is a **budget, not a tuned value.** It was written before the arc pricer
+    existed and nothing has since been fitted to it; at 600 it costs about 15 minutes on the
+    236-stop hub that sets the makespan. If the ablation or the multi-seed evaluation needs
+    headroom this is the lever, and moving it is reported rather than absorbed — a figure quoted
+    against one budget is not comparable with one quoted against another.
+
+    ``or_opt_max_segment_stops`` bounds the run :func:`~src.stage2.operators.or_opt_mutation`
+    relocates. Three is the conventional or-opt neighbourhood: long enough to move a small cluster
+    of drops together, short enough that the move stays local and the tour it lands in is still
+    recognisably the parent's.
+    """
 
     population_size: int = 150
     generations: int = 600
@@ -327,6 +339,7 @@ class GAConfig:
     elitism_count: int = 3
     local_search_pct: float = 0.10
     stagnation_limit: int = 75
+    or_opt_max_segment_stops: int = 3
 
     def __post_init__(self) -> None:
         _require(
@@ -346,6 +359,7 @@ class GAConfig:
         )
         _require(0.0 <= self.local_search_pct <= 1.0, "local_search_pct must be in [0, 1]")
         _require(self.stagnation_limit > 0, "stagnation_limit must be positive")
+        _require(self.or_opt_max_segment_stops > 0, "or_opt_max_segment_stops must be positive")
 
 
 @dataclass(frozen=True, slots=True)
