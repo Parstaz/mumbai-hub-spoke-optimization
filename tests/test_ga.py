@@ -13,6 +13,7 @@ Instances are tiny and the generation budget is small, because none of that depe
 from __future__ import annotations
 
 import dataclasses
+import logging
 
 import numpy as np
 import pytest
@@ -162,6 +163,41 @@ def test_a_run_is_reproducible_from_its_seed() -> None:
     first = evolve(context, SMALL_GA, np.random.default_rng(7))
     second = evolve(context, SMALL_GA, np.random.default_rng(7))
     assert first == second
+
+
+def test_tracing_does_not_change_the_search(caplog: pytest.LogCaptureFixture) -> None:
+    """Instrumentation must be read-only, or it measures a run that would not otherwise happen.
+
+    This is the guarantee that lets §8.5's open question be settled by turning tracing on rather
+    than by changing a setting: the traced run *is* the untraced run, so nothing observed in it is
+    an artefact of observing it.
+    """
+    context = make_context(9)
+    plain = evolve(context, SMALL_GA, np.random.default_rng(5))
+    traced_config = dataclasses.replace(SMALL_GA, trace_generations=True)
+    with caplog.at_level(logging.INFO, logger="src.stage2.ga"):
+        traced = evolve(context, traced_config, np.random.default_rng(5))
+    assert traced == plain
+    assert any("population min" in record.message for record in caplog.records)
+
+
+def test_tracing_reports_when_the_incumbent_missed_a_better_plan(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The line that would confirm the mechanism has to be emitted when the condition holds.
+
+    ``_configured_best`` re-prices only the champion by search objective, so whenever the
+    population's configured-rate minimum beats the incumbent, an improvement was available and
+    invisible. The trace has to say so explicitly rather than leave it to be derived.
+    """
+    impossible = TimeWindow(Seconds(8 * 3600.0), Seconds(8 * 3600.0 + 60.0))
+    context = make_context(9, (impossible,) * 9)
+    traced_config = dataclasses.replace(SMALL_GA, trace_generations=True)
+    with caplog.at_level(logging.INFO, logger="src.stage2.ga"):
+        evolve(context, traced_config, np.random.default_rng(6))
+    traced = [record.message for record in caplog.records if "gen" in record.message]
+    assert traced, "a traced run must emit one line per generation"
+    assert all("incumbent" in line and "population min" in line for line in traced)
 
 
 def test_different_seeds_explore_differently() -> None:

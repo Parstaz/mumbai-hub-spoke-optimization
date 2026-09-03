@@ -78,6 +78,12 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--workers", type=int, default=stage1.workers, help="per-hub pool size; 0 means one per CPU"
     )
     parser.add_argument(
+        "--trace-generations",
+        action="store_true",
+        help="log per generation whether the incumbent moved and whether anything could have "
+        "moved it; roughly doubles the run and does not change its answer",
+    )
+    parser.add_argument(
         "--deterministic",
         action="store_true",
         help="stop Stage 1 at the first-solution heuristic, making the inbound leg reproducible",
@@ -97,6 +103,7 @@ def _config(args: argparse.Namespace) -> Config:
             population_size=args.population,
             generations=args.generations,
             local_search_pct=0.0 if args.no_local_search else defaults.local_search_pct,
+            trace_generations=args.trace_generations,
         ),
     )
 

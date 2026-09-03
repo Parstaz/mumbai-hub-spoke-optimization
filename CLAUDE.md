@@ -276,8 +276,18 @@ Stated plainly in the README. Do not soften or omit them.
    A mechanism the data fits better, and which is **not** multiplier-dependent: `_configured_best`
    re-prices only the population's champion-by-search-objective each generation, so any other
    individual that would have improved the incumbent is invisible to it and the stagnation counter
-   climbs anyway. Untested. Neither `stagnation_limit` nor `generations` is tuned to chase a
-   number, and step 7 should measure before either moves.
+   climbs anyway. `GAConfig.trace_generations` is the instrument for it: it reports the
+   population's configured-rate minimum against the incumbent each generation, and any line where
+   the minimum wins is the mechanism caught directly. It changes nothing about the search — that
+   is asserted by a test — so the measurement carries no confound from its own switch. Re-pricing
+   the top *k* rather than the champion alone is the *fix*, and comes second.
+
+   Neither `stagnation_limit` nor `generations` is tuned to chase a number, and step 7 should
+   measure before either moves.
+   **Carry this into step 7 either way.** If the mechanism is real, both ablation arms stop early
+   for the same reason, so the comparison between them stays fair — but "local search buys X%" is
+   then a statement about a *truncated* search rather than the configured one, and the write-up has
+   to say so rather than discover it afterwards.
 
 6. OR-Tools optimises a **static** arc cost using the dispatch-hour traffic multiplier, because a
    `RoutingModel` fixes arc costs before searching. The cumulative band-blended model still

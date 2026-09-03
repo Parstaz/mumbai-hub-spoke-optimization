@@ -25,6 +25,7 @@ not, which costs a mutation rather than a generation.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -37,6 +38,8 @@ from src.stage2.population import initial_population
 from src.stage2.pricing import TourPricer, ordered_tour
 from src.stage2.split import Permutation, SplitContext, split
 from src.units import Rupees
+
+logger = logging.getLogger(__name__)
 
 _DIVERSITY_RETRIES = 8
 """Mutations attempted to make a duplicate child distinct before it is accepted anyway.
@@ -131,6 +134,8 @@ def evolve(context: SplitContext, ga: GAConfig, rng: np.random.Generator) -> Hub
             best, stagnant = champion, 0
         else:
             stagnant += 1
+        if ga.trace_generations:
+            _log_generation(session, population, best, generation)
         if generation % ga.penalty_adapt_interval == 0:
             penalty = penalty.adapt(_violating_fraction(population, session), ga)
             population = tuple(_score(one.permutation, session, penalty) for one in population)
@@ -150,6 +155,33 @@ def _outcome(
         objective_inr=best.objective_inr,
         generations_run=generations,
         final_multiplier=penalty.multiplier,
+    )
+
+
+def _log_generation(
+    session: Session, population: tuple[Individual, ...], best: Incumbent, generation: int
+) -> None:
+    """Report whether the incumbent moved, and whether anything could have moved it.
+
+    The instrumentation for CLAUDE.md §8.5's open question. :func:`_configured_best` re-prices only
+    the champion *by search objective*, so an individual that would have improved the incumbent at
+    configured rates is invisible to it. If ``population min`` beats ``incumbent`` on any line
+    here, exactly that has happened and the mechanism is confirmed directly — without changing a
+    setting, and so without confounding the measurement with the change's own effect.
+
+    Read-only. Nothing computed here feeds back into the search, which is what lets a traced run
+    be compared against an untraced one.
+    """
+    cheapest = min(
+        float(split(one.permutation, session.context).search_objective_inr) for one in population
+    )
+    logger.info(
+        "hub %d gen %d: incumbent %.1f, population min %.1f%s",
+        session.context.workload.hub_id,
+        generation,
+        best.objective_inr,
+        cheapest,
+        "  <- incumbent missed a better plan" if cheapest < best.objective_inr else "",
     )
 
 
