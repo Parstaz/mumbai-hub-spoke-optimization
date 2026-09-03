@@ -12,8 +12,11 @@ Instances are tiny and the generation budget is small, because none of that depe
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import logging
+import re
+from collections.abc import Iterator
 
 import numpy as np
 import pytest
@@ -66,6 +69,47 @@ def ring_matrix(n_nodes: int, seed: int) -> DistanceMatrix:
     matrix: DistanceMatrix = rng.uniform(300.0, 12_000.0, size=(n_nodes, n_nodes))
     np.fill_diagonal(matrix, 0.0)
     return matrix
+
+
+@contextlib.contextmanager
+def caplog_counts(
+    context: SplitContext, ga: GAConfig, index: int | None = None
+) -> Iterator[list[int]]:
+    """Run a traced evolve and yield the per-generation diversity counts parsed back out.
+
+    Parsing the log rather than reaching into the GA keeps the assertion on what an operator would
+    actually see, which is the thing that has to be right.
+    """
+    collected: list[int] = []
+    with _capture("src.stage2.ga") as records:
+        evolve(context, ga, np.random.default_rng(21))
+    for message in records:
+        found = re.search(r"children (\d+) fresh / (\d+) mutated / (\d+) duplicate", message)
+        if found:
+            counts = [int(value) for value in found.groups()]
+            collected.append(counts[index] if index is not None else sum(counts))
+    yield collected
+
+
+@contextlib.contextmanager
+def _capture(name: str) -> Iterator[list[str]]:
+    """Collect a logger's messages without depending on pytest's global capture state."""
+    messages: list[str] = []
+
+    class _Sink(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            messages.append(record.getMessage())
+
+    target = logging.getLogger(name)
+    handler = _Sink()
+    previous = target.level
+    target.addHandler(handler)
+    target.setLevel(logging.INFO)
+    try:
+        yield messages
+    finally:
+        target.removeHandler(handler)
+        target.setLevel(previous)
 
 
 def make_context(
@@ -179,6 +223,7 @@ def test_tracing_does_not_change_the_search(caplog: pytest.LogCaptureFixture) ->
         traced = evolve(context, traced_config, np.random.default_rng(5))
     assert traced == plain
     assert any("population min" in record.message for record in caplog.records)
+    assert any("duplicate" in record.message for record in caplog.records)
 
 
 def test_tracing_reports_when_the_incumbent_missed_a_better_plan(
@@ -207,6 +252,32 @@ def test_different_seeds_explore_differently() -> None:
         evolve(context, SMALL_GA, np.random.default_rng(seed)).permutation for seed in range(6)
     }
     assert len(outcomes) > 1
+
+
+def test_every_child_is_counted_exactly_once_by_the_diversity_guard() -> None:
+    """The three outcomes must partition the children bred, or the collapse reading is wrong.
+
+    A miscount here would be invisible in the run and would silently distort the one measurement
+    that separates genuine convergence from a tracking failure.
+    """
+    context = make_context(4)
+    traced_config = dataclasses.replace(SMALL_GA, trace_generations=True)
+    with caplog_counts(context, traced_config) as counted:
+        bred_per_generation = SMALL_GA.population_size - SMALL_GA.elitism_count
+        assert counted, "a traced run must report diversity every generation"
+        assert all(total == bred_per_generation for total in counted)
+
+
+def test_a_hub_with_almost_no_orderings_accepts_duplicates() -> None:
+    """Three stops admit six orderings, so a population of twelve cannot avoid clones.
+
+    This is the signature of a collapsed population, forced here so the counter is known to
+    register it rather than only ever reporting zero.
+    """
+    context = make_context(3)
+    traced_config = dataclasses.replace(SMALL_GA, trace_generations=True)
+    with caplog_counts(context, traced_config, index=2) as duplicates:
+        assert max(duplicates) > 0, "a hub with six possible orderings must produce duplicates"
 
 
 def test_the_incumbent_is_never_worse_than_the_first_generation() -> None:

@@ -99,6 +99,26 @@ class HubOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class DiversityCounts:
+    """How the diversity guard fared over one generation's children.
+
+    Three outcomes, counted apart because they mean different things. ``fresh`` was novel as bred.
+    ``mutated`` needed one or more or-opt kicks to become novel — the guard doing its job.
+    ``duplicate`` was accepted while still a clone, because ``_DIVERSITY_RETRIES`` mutations found
+    nothing new: the population has run out of room around that chromosome.
+
+    ``duplicate`` is the one that decides whether an early stop is convergence or a tracking
+    failure. A meaningful share of knowingly-duplicate children per generation means the population
+    has collapsed, and a run ending shortly after has genuinely converged rather than failed to
+    notice an available improvement.
+    """
+
+    fresh: int
+    mutated: int
+    duplicate: int
+
+
+@dataclass(frozen=True, slots=True)
 class Session:
     """The per-hub constants of one run. ``context`` holds the *configured* rates, never scaled."""
 
@@ -128,14 +148,15 @@ def evolve(context: SplitContext, ga: GAConfig, rng: np.random.Generator) -> Hub
     stagnant = 0
 
     for generation in range(1, ga.generations + 1):
-        population = _refine_some(_repopulate(population, session, penalty), session, penalty)
+        bred, diversity = _repopulate(population, session, penalty)
+        population = _refine_some(bred, session, penalty)
         champion = _configured_best(population, session)
         if champion.objective_inr < best.objective_inr:
             best, stagnant = champion, 0
         else:
             stagnant += 1
         if ga.trace_generations:
-            _log_generation(session, population, best, generation)
+            _log_generation(session, population, best, generation, diversity)
         if generation % ga.penalty_adapt_interval == 0:
             penalty = penalty.adapt(_violating_fraction(population, session), ga)
             population = tuple(_score(one.permutation, session, penalty) for one in population)
@@ -159,7 +180,11 @@ def _outcome(
 
 
 def _log_generation(
-    session: Session, population: tuple[Individual, ...], best: Incumbent, generation: int
+    session: Session,
+    population: tuple[Individual, ...],
+    best: Incumbent,
+    generation: int,
+    diversity: DiversityCounts,
 ) -> None:
     """Report whether the incumbent moved, and whether anything could have moved it.
 
@@ -169,6 +194,11 @@ def _log_generation(
     here, exactly that has happened and the mechanism is confirmed directly — without changing a
     setting, and so without confounding the measurement with the change's own effect.
 
+    The diversity counts ride along because they decide the other reading of an early stop. If
+    the incumbent never misses anything *and* a growing share of children are accepted as known
+    duplicates, the population has collapsed and stopping is convergence — a question about the
+    guard rather than about incumbent tracking, and one this trace can answer in the same run.
+
     Read-only. Nothing computed here feeds back into the search, which is what lets a traced run
     be compared against an untraced one.
     """
@@ -176,11 +206,15 @@ def _log_generation(
         float(split(one.permutation, session.context).search_objective_inr) for one in population
     )
     logger.info(
-        "hub %d gen %d: incumbent %.1f, population min %.1f%s",
+        "hub %d gen %d: incumbent %.1f, population min %.1f, "
+        "children %d fresh / %d mutated / %d duplicate%s",
         session.context.workload.hub_id,
         generation,
         best.objective_inr,
         cheapest,
+        diversity.fresh,
+        diversity.mutated,
+        diversity.duplicate,
         "  <- incumbent missed a better plan" if cheapest < best.objective_inr else "",
     )
 
@@ -238,25 +272,48 @@ def _is_late(individual: Individual, session: Session) -> bool:
 
 def _repopulate(
     population: tuple[Individual, ...], session: Session, penalty: AdaptivePenalty
-) -> tuple[Individual, ...]:
+) -> tuple[tuple[Individual, ...], DiversityCounts]:
     """Carry the elites through unchanged and breed the rest, rejecting clones.
 
     Elites are carried by chromosome rather than re-scored, so their recorded objective stays the
     one selection compared them on. A penalty change re-scores the whole population including them.
+
+    The counts returned alongside are read-only bookkeeping: counting how each child was obtained
+    changes nothing about which child is obtained.
     """
     ranked = sorted(population, key=lambda one: one.objective_inr)
     survivors = list(ranked[: session.ga.elitism_count])
     seen = {one.permutation for one in survivors}
+    fresh = mutated = duplicate = 0
 
     while len(survivors) < session.ga.population_size:
-        child = _breed(population, session)
-        for _ in range(_DIVERSITY_RETRIES):
-            if child not in seen:
-                break
-            child = or_opt_mutation(child, session.ga.or_opt_max_segment_stops, session.rng)
+        child, mutations = _distinct_child(population, session, seen)
+        if child in seen:
+            duplicate += 1
+        elif mutations:
+            mutated += 1
+        else:
+            fresh += 1
         seen.add(child)
         survivors.append(_score(child, session, penalty))
-    return tuple(survivors)
+    return tuple(survivors), DiversityCounts(fresh=fresh, mutated=mutated, duplicate=duplicate)
+
+
+def _distinct_child(
+    population: tuple[Individual, ...], session: Session, seen: set[Permutation]
+) -> tuple[Permutation, int]:
+    """Breed a child and kick it with or-opt until it is novel, or the retries run out.
+
+    Returns the child and how many mutations it took. A child still in ``seen`` on return is one
+    the guard could not make novel; it is accepted anyway, because a three-stop hub has six
+    orderings in total and a population that has enumerated them would otherwise spin here forever.
+    """
+    child = _breed(population, session)
+    for mutations in range(_DIVERSITY_RETRIES):
+        if child not in seen:
+            return child, mutations
+        child = or_opt_mutation(child, session.ga.or_opt_max_segment_stops, session.rng)
+    return child, _DIVERSITY_RETRIES
 
 
 def _breed(population: tuple[Individual, ...], session: Session) -> Permutation:
