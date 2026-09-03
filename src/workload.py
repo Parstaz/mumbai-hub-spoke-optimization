@@ -131,6 +131,34 @@ def nearest_hub(
     return np.asarray(np.argmin(block, axis=0), dtype=np.intp)
 
 
+def hub_of_customer(instance: Instance, hub_of_source: NodeArray) -> NodeArray:
+    """Hub id serving each customer: the one its own shipment was consolidated at.
+
+    **Not the customer's nearest hub.** Stage 1 has already carried the parcel somewhere and it
+    has to leave from where it landed. That dependence is the greedy decomposition the README
+    lists as a known limitation, and both the benchmark and the optimized pipeline have to display
+    it rather than dodge it — a Stage 2 that delivered from whichever hub was closest would be
+    solving a different, easier problem and its column would not be comparable.
+
+    Neutral ground on purpose. The greedy baseline and :mod:`src.stage2.solve` both need this
+    mapping, and §1.1 forbids the control importing the treatment; a private copy in each would be
+    two chances to disagree about which hub holds a parcel.
+
+    Args:
+        instance: Supplies the shipments that link a customer to its origin source.
+        hub_of_source: Hub id per **source id**, dense over every source. A caller working from a
+            filtered assignment — Stage 1 assigns only sources with something waiting — must
+            scatter it back to source-id order first.
+
+    Returns:
+        A hub id per customer id.
+    """
+    hubs = np.empty(len(instance.customers), dtype=np.intp)
+    for shipment in instance.shipments:
+        hubs[shipment.customer_id] = hub_of_source[shipment.source_id]
+    return hubs
+
+
 def group_by_hub(
     hub_nodes: NodeArray, hub_of_stop: NodeArray, stop_nodes: NodeArray, demand_kg: DemandArray
 ) -> tuple[HubWorkload, ...]:

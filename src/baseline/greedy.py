@@ -40,10 +40,11 @@ from src.costs.traffic import TrafficModel
 from src.data.instance import Instance
 from src.solution import Route, Solution
 from src.tour import RoutingContext, build_route
-from src.units import NodeArray, NodeId, Seconds
+from src.units import NodeId, Seconds
 from src.workload import (
     HubWorkload,
     group_by_hub,
+    hub_of_customer,
     nearest_hub,
     node_array,
     require_servable,
@@ -88,7 +89,7 @@ def solve_baseline(instance: Instance, matrices: CostMatrices, traffic: TrafficM
     customer_nodes = node_array(instance.customer_node(c.customer_id) for c in instance.customers)
 
     hub_of_source = nearest_hub(hub_nodes, source_nodes, matrices.distance_m)
-    hub_of_customer = _hub_holding_each_shipment(instance, hub_of_source)
+    customer_hubs = hub_of_customer(instance, hub_of_source)
 
     context = RoutingContext(
         matrices=matrices,
@@ -102,7 +103,7 @@ def solve_baseline(instance: Instance, matrices: CostMatrices, traffic: TrafficM
             group_by_hub(hub_nodes, hub_of_source, source_nodes, source_demand_kg), context
         ),
         stage2_routes=_stage_routes(
-            group_by_hub(hub_nodes, hub_of_customer, customer_nodes, customer_demand_kg), context
+            group_by_hub(hub_nodes, customer_hubs, customer_nodes, customer_demand_kg), context
         ),
     )
     logger.info(
@@ -113,20 +114,6 @@ def solve_baseline(instance: Instance, matrices: CostMatrices, traffic: TrafficM
         len(instance.customers),
     )
     return solution
-
-
-def _hub_holding_each_shipment(instance: Instance, hub_of_source: NodeArray) -> NodeArray:
-    """Hub id serving each customer: the one its own shipment was consolidated at.
-
-    Not the customer's nearest hub. Stage 1 has already carried the parcel somewhere, and the
-    parcel has to leave from where it landed — that dependence is exactly the greedy decomposition
-    the README lists as a known limitation, and the baseline has to display it rather than dodge
-    it.
-    """
-    hubs = np.empty(len(instance.customers), dtype=np.intp)
-    for shipment in instance.shipments:
-        hubs[shipment.customer_id] = hub_of_source[shipment.source_id]
-    return hubs
 
 
 def _nearest_neighbour_tours(
