@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.cli.run_pipeline import _delta, comparison_lines, main, solve_pipeline
+from src.cli.run_pipeline import _delta, budget_lines, comparison_lines, main, solve_pipeline
 from src.config import Config, GAConfig, GeoConfig, RunConfig, Stage1Config
 from src.costs.matrix import CostMatrices, HaversineProvider
 from src.costs.traffic import TrafficModel
@@ -48,7 +48,7 @@ def test_the_composed_plan_passes_the_scorer() -> None:
     matrices = CostMatrices(distance_m=distance_m, duration_s=duration_s)
     traffic = TrafficModel.from_config(SMALL.traffic)
 
-    solution = solve_pipeline(instance, matrices, traffic, unconstrained, SMALL)
+    solution, _ = solve_pipeline(instance, matrices, traffic, unconstrained, SMALL)
     metrics = evaluate_solution(solution, instance, SMALL.cost)
     assert metrics.cost_per_drop_inr > 0.0
     assert len(solution.stage2_routes) > 0
@@ -82,13 +82,39 @@ def test_the_comparison_table_has_a_row_per_reported_measure() -> None:
     ).matrix(instance.coordinates())
     matrices = CostMatrices(distance_m=distance_m, duration_s=duration_s)
     traffic = TrafficModel.from_config(SMALL.traffic)
-    solution = solve_pipeline(instance, matrices, traffic, unconstrained, SMALL)
+    solution, _ = solve_pipeline(instance, matrices, traffic, unconstrained, SMALL)
     metrics = evaluate_solution(solution, instance, SMALL.cost)
 
     lines = comparison_lines(metrics, metrics, SMALL.cost)
     assert len(lines) == 13
     assert lines[0].split() == ["greedy", "pipeline", "change"]
     assert all("+0.0%" in line for line in lines[2:] if "—" not in line)
+
+
+def test_the_budget_line_reports_what_was_used_not_what_was_configured() -> None:
+    """The header describes the run, so it must not claim a budget the run did not spend.
+
+    A hub stops when ``stagnation_limit`` generations pass without improving its incumbent, and on
+    the default instance every hub does. A header reading "150x600" without this line describes a
+    search that did not happen.
+    """
+    instance = generate_instance(SMALL.geo, SMALL.fleet, SMALL.schedule, SMALL.run.seed)
+    distance_m, duration_s = HaversineProvider(
+        circuity_factor=SMALL.run.circuity_factor, speed_kmph=SMALL.run.haversine_speed_kmph
+    ).matrix(instance.coordinates())
+    matrices = CostMatrices(distance_m=distance_m, duration_s=duration_s)
+    traffic = TrafficModel.from_config(SMALL.traffic)
+    _, hubs = solve_pipeline(instance, matrices, traffic, unconstrained, SMALL)
+
+    lines = budget_lines(hubs, SMALL.ga)
+    assert f"of {SMALL.ga.generations} budget" in lines[0]
+    used = [outcome.generations_run for outcome in hubs]
+    assert f"range {min(used)}-{max(used)}" in lines[0]
+
+
+def test_the_budget_line_is_empty_when_no_hub_ran() -> None:
+    """An instance with nothing to deliver prints no budget line rather than dividing by zero."""
+    assert budget_lines((), SMALL.ga) == []
 
 
 def test_the_entry_point_runs_end_to_end(capsys: pytest.CaptureFixture[str]) -> None:

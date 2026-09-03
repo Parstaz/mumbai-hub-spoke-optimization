@@ -55,6 +55,20 @@ _LOCAL_HUB_NODE = NodeId(0)
 
 
 @dataclass(frozen=True, slots=True)
+class Stage2Plan:
+    """The final-mile tours, and what each hub's search actually did to produce them.
+
+    ``outcomes`` is returned rather than logged and dropped because the configured generation
+    budget is not the budget spent — every hub on seed 42 stopped on ``stagnation_limit`` well
+    short of it. A caller that reports "150x600" without saying what was used is describing a run
+    that did not happen, so the entry point needs the figures, not just the routes.
+    """
+
+    routes: tuple[Route, ...]
+    outcomes: tuple[HubOutcome, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class Stage2Task:
     """One hub's complete, self-contained final-mile problem — all a worker may know."""
 
@@ -78,7 +92,7 @@ def solve_stage2(
     traffic: TrafficModel,
     hub_of_stop: NodeArray,
     config: Config,
-) -> tuple[Route, ...]:
+) -> Stage2Plan:
     """Build the final-mile plan: one GA per hub, then the tours its answer implies.
 
     Args:
@@ -91,7 +105,7 @@ def solve_stage2(
         config: The full run configuration. Sliced down before anything crosses to a worker.
 
     Returns:
-        Every deployed tour across all hubs, in hub order.
+        Every deployed tour across all hubs in hub order, with each hub's search outcome.
     """
     workloads = _workloads(instance, hub_of_stop, config)
     tasks = tuple(
@@ -119,7 +133,7 @@ def solve_stage2(
                 f"hub {workload.hub_id}'s workload was paired with hub {outcome.hub_id}'s plan"
             )
         routes.extend(split(outcome.permutation, context).routes)
-    return tuple(routes)
+    return Stage2Plan(routes=tuple(routes), outcomes=outcomes)
 
 
 def _log_finished(outcome: HubOutcome, done: int, total: int) -> None:

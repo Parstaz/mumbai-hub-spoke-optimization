@@ -38,6 +38,7 @@ from src.scoring import Metrics, evaluate_solution
 from src.solution import Solution
 from src.stage1.assignment import AssignmentStrategy
 from src.stage1.cvrp import solve_stage1
+from src.stage2.ga import HubOutcome
 from src.stage2.solve import hub_of_source, solve_stage2
 from src.workload import hub_of_customer
 
@@ -106,7 +107,7 @@ def solve_pipeline(
     traffic: TrafficModel,
     strategy: AssignmentStrategy,
     config: Config,
-) -> Solution:
+) -> tuple[Solution, tuple[HubOutcome, ...]]:
     """Solve both legs in order and compose them into one plan.
 
     The composition is the whole point and is one line: Stage 2 delivers from the hub each
@@ -118,7 +119,33 @@ def solve_pipeline(
     inbound = solve_stage1(instance, matrices, traffic, strategy, config)
     customer_hubs = hub_of_customer(instance, hub_of_source(instance, inbound))
     outbound = solve_stage2(instance, matrices, traffic, customer_hubs, config)
-    return Solution(stage1_routes=inbound, stage2_routes=outbound)
+    return Solution(stage1_routes=inbound, stage2_routes=outbound.routes), outbound.outcomes
+
+
+def budget_lines(hubs: tuple[HubOutcome, ...], ga: GAConfig) -> list[str]:
+    """Report the generations actually used against the budget configured.
+
+    Printed rather than left to a limitation further down, because this header is the run's
+    self-description and step 9 will quote it. A hub stops when ``stagnation_limit`` generations
+    pass without improving its incumbent, and on seed 42 every hub stopped that way well short of
+    the budget — so a header claiming the budget was spent would be describing a run that did not
+    happen.
+    """
+    if not hubs:
+        return []
+    used = sorted(outcome.generations_run for outcome in hubs)
+    early = sum(1 for value in used if value < ga.generations)
+    median = used[len(used) // 2]
+    lines = [
+        f"{'generations used':<{_LABEL_WIDTH}}median {median}, range {used[0]}-{used[-1]} "
+        f"of {ga.generations} budget",
+    ]
+    if early:
+        lines.append(
+            f"{'':<{_LABEL_WIDTH}}{early} of {len(used)} hubs stopped early on "
+            f"stagnation_limit={ga.stagnation_limit}"
+        )
+    return lines
 
 
 def comparison_lines(baseline: Metrics, optimized: Metrics, cost: CostConfig) -> list[str]:
@@ -191,7 +218,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     baseline = evaluate_solution(solve_baseline(instance, matrices, traffic), instance, config.cost)
     started = time.perf_counter()
-    solution = solve_pipeline(instance, matrices, traffic, STRATEGIES[args.strategy], config)
+    solution, hubs = solve_pipeline(instance, matrices, traffic, STRATEGIES[args.strategy], config)
     elapsed_s = time.perf_counter() - started
     optimized = evaluate_solution(solution, instance, config.cost)
 
@@ -201,9 +228,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"  {line}")
     print(
         f"  {'assignment':<{_LABEL_WIDTH}}{args.strategy}"
-        f", GA {config.ga.population_size}x{config.ga.generations}"
+        f", population {config.ga.population_size}, generation budget {config.ga.generations}"
         f"{'' if config.ga.local_search_pct else ', no local search'}"
     )
+    for line in budget_lines(hubs, config.ga):
+        print(f"  {line}")
     print(f"  {'solve time':<{_LABEL_WIDTH}}{elapsed_s:,.1f} s\n")
     for line in comparison_lines(baseline, optimized, config.cost):
         print(f"  {line}")

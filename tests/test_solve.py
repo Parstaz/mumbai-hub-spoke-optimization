@@ -132,7 +132,7 @@ def test_the_plan_delivers_to_every_customer_exactly_once() -> None:
     instance, matrices, traffic = build(config)
     inbound = inbound_leg(instance, matrices, traffic, config)
     customer_hubs = hub_of_customer(instance, hub_of_source(instance, inbound))
-    outbound = solve_stage2(instance, matrices, traffic, customer_hubs, config)
+    outbound = solve_stage2(instance, matrices, traffic, customer_hubs, config).routes
 
     served = [int(node) for route in outbound for node in route.interior_nodes]
     expected = [instance.customer_node(c.customer_id) for c in instance.customers]
@@ -145,7 +145,7 @@ def test_every_tour_leaves_from_the_hub_that_holds_its_parcels() -> None:
     instance, matrices, traffic = build(config)
     inbound = inbound_leg(instance, matrices, traffic, config)
     customer_hubs = hub_of_customer(instance, hub_of_source(instance, inbound))
-    outbound = solve_stage2(instance, matrices, traffic, customer_hubs, config)
+    outbound = solve_stage2(instance, matrices, traffic, customer_hubs, config).routes
 
     for route in outbound:
         assert route.nodes[0] == instance.hub_node(route.hub_id)
@@ -161,7 +161,7 @@ def test_the_whole_plan_scores_through_the_single_scoring_path() -> None:
     instance, matrices, traffic = build(config)
     inbound = inbound_leg(instance, matrices, traffic, config)
     customer_hubs = hub_of_customer(instance, hub_of_source(instance, inbound))
-    outbound = solve_stage2(instance, matrices, traffic, customer_hubs, config)
+    outbound = solve_stage2(instance, matrices, traffic, customer_hubs, config).routes
 
     metrics = evaluate_solution(
         Solution(stage1_routes=inbound, stage2_routes=outbound), instance, config.cost
@@ -177,8 +177,8 @@ def test_a_run_is_reproducible_across_repeats() -> None:
     inbound = inbound_leg(instance, matrices, traffic, config)
     customer_hubs = hub_of_customer(instance, hub_of_source(instance, inbound))
 
-    first = solve_stage2(instance, matrices, traffic, customer_hubs, config)
-    second = solve_stage2(instance, matrices, traffic, customer_hubs, config)
+    first = solve_stage2(instance, matrices, traffic, customer_hubs, config).routes
+    second = solve_stage2(instance, matrices, traffic, customer_hubs, config).routes
     assert [route.nodes for route in first] == [route.nodes for route in second]
 
 
@@ -194,8 +194,10 @@ def test_the_pool_and_the_sequential_path_agree() -> None:
     inbound = inbound_leg(instance, matrices, traffic, sequential_config)
     customer_hubs = hub_of_customer(instance, hub_of_source(instance, inbound))
 
-    sequential = solve_stage2(instance, matrices, traffic, customer_hubs, sequential_config)
-    pooled = solve_stage2(instance, matrices, traffic, customer_hubs, small_config(workers=2))
+    sequential = solve_stage2(instance, matrices, traffic, customer_hubs, sequential_config).routes
+    pooled = solve_stage2(
+        instance, matrices, traffic, customer_hubs, small_config(workers=2)
+    ).routes
     assert [route.nodes for route in sequential] == [route.nodes for route in pooled]
 
 
@@ -211,7 +213,7 @@ def test_a_plan_is_reassembled_against_its_own_hub() -> None:
     inbound = inbound_leg(instance, matrices, traffic, config)
     customer_hubs = hub_of_customer(instance, hub_of_source(instance, inbound))
     offset = len(instance.hubs) + len(instance.sources)
-    for route in solve_stage2(instance, matrices, traffic, customer_hubs, config):
+    for route in solve_stage2(instance, matrices, traffic, customer_hubs, config).routes:
         for node in route.interior_nodes:
             assert customer_hubs[int(node) - offset] == route.hub_id
 
@@ -235,6 +237,17 @@ def test_a_worker_payload_carries_no_shared_state() -> None:
         "randomness is rebuilt from a seed, never shipped: a shared Generator makes a run "
         "succeed and stop repeating"
     )
+
+
+def test_the_plan_reports_one_outcome_per_hub() -> None:
+    """The entry point needs what each hub actually did, not just the tours it produced."""
+    config = small_config()
+    instance, matrices, traffic = build(config)
+    inbound = inbound_leg(instance, matrices, traffic, config)
+    customer_hubs = hub_of_customer(instance, hub_of_source(instance, inbound))
+    plan = solve_stage2(instance, matrices, traffic, customer_hubs, config)
+    assert len(plan.outcomes) == len(set(customer_hubs.tolist()))
+    assert all(outcome.generations_run >= 1 for outcome in plan.outcomes)
 
 
 def test_the_payload_is_frozen() -> None:
