@@ -223,35 +223,24 @@ Stated plainly, and not softened anywhere else in the repository:
    still comes from the cumulative band-blended model in `src/tour.py`. The proxy affects which
    tour is chosen, never what that tour is then said to cost.
 
-8. **The GA stops well short of its configured generation budget.** On seed 42 every hub ended
-   on `stagnation_limit = 75` rather than on `generations = 600` — between 76 and 463 generations,
-   median around 95, with the largest hub (236 stops) stopping at 95. The run header reads
-   "GA 150×600" and that overstates the search actually done by roughly 5×.
+8. **The GA stops well short of its configured generation budget — and measurement says that is
+   correct, not a defect.** On seed 42 every hub ended on `stagnation_limit = 75` rather than on
+   `generations = 600`: between 76 and 463 generations, median around 95. The run header reports
+   generations used against the budget so the figure never has to be corrected further down.
 
-   The obvious explanation was penalty distortion. Final adaptive multipliers sat at ×8–×32 on 15
-   of 16 hubs, and with only 1.6 h of lateness left ×32 prices that residue at roughly ₹12,800 of
-   search pressure against ₹410 of actual cost, while distance — ₹80,008 remaining, 11% captured —
-   is weighted at face value. **The data does not back it.** Over the 16 hubs, log₂(multiplier)
-   against generations-run comes out at Pearson +0.21 and Spearman +0.16 — weakly positive, where
-   that story predicts negative — and the one hub that relaxed all the way to ×1.00 ran the fewest
-   generations of all sixteen. It is not refuted either: n = 16, and multiplier is confounded with
-   hub size (stops against log₂(multiplier) is +0.49, because larger hubs have more windows to
-   miss).
+   Two explanations were proposed for that, and `--trace-generations` killed both. Tracing hub 9 —
+   the largest, at 236 stops — flagged **0 of 95** generations in which the population contained a
+   plan better than the incumbent, so the GA is not losing improvements by re-pricing only its
+   search champion. The same run recorded **no duplicate children at all**, with 104 of 147 still
+   novel in the final ten generations, so the population is not collapsing either. What it shows
+   instead is 13 incumbent improvements, all before generation 27, followed by 68 generations in
+   which a healthy, diverse population found nothing better. The stagnation limit stopped a search
+   that had converged.
 
-   A better fit, and one that does not depend on the multiplier at all: the incumbent is refreshed
-   from only the population's best-by-search-objective each generation, so any *other* individual
-   that would have improved it never gets re-priced and the stagnation counter runs up regardless.
-   Also untested — but instrumented: `--trace-generations` reports the population's
-   configured-rate minimum against the incumbent every generation, and any line where the minimum
-   wins is the mechanism caught in the act. It is read-only, so the traced run is the untraced run.
-   Re-pricing the top *k* rather than the single champion is the fix, and only comes after the
-   measurement. Step 7 measures before either knob moves; the GA's hyperparameters are not tuned
-   to chase a headline.
-
-   **This matters for the ablation either way.** If the mechanism is real, both arms stop early for
-   the same reason, so comparing them remains fair — but "local search buys X%" then describes a
-   truncated search rather than the configured one, and the write-up says so up front instead of
-   discovering it later.
+   The consequence is that **the generation budget is not what limits the result** — the reach of
+   the operators and the local search is. Raising `generations` on a hub like this buys nothing.
+   Two caveats: that is one hub on one seed, and hub 0 ran for 463 generations, so how quickly a
+   hub converges plainly varies with its size and geometry.
 
 9. **Guided local search under a wall-clock limit is not bit-reproducible.** It returns whatever
    it had reached when the clock ran out, so the same seed on a busier machine can yield a
