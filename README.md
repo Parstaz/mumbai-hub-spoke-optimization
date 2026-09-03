@@ -228,14 +228,21 @@ Stated plainly, and not softened anywhere else in the repository:
    median around 95, with the largest hub (236 stops) stopping at 95. The run header reads
    "GA 150×600" and that overstates the search actually done by roughly 5×.
 
-   There is a measured candidate cause, and it is **not yet tested**. Final adaptive penalty
-   multipliers sat at ×8–×32 on 15 of 16 hubs. By then only 1.6 h of lateness remained, so ×32
-   prices that residue at roughly ₹12,800 of search pressure against ₹410 of actual cost — while
-   distance, where ₹80,008 remains and only 11% has been captured, is weighted at face value.
-   Selection ranks on that distorted objective while the incumbent is tracked at configured rates,
-   so gains on a term worth 0.2% of total cost need not move the incumbent and the stagnation
-   counter runs up. One hub at `penalty_max_multiplier = 1.0` would settle it. That is step 7's
-   experiment; the GA's hyperparameters are not tuned to chase a headline.
+   The obvious explanation was penalty distortion. Final adaptive multipliers sat at ×8–×32 on 15
+   of 16 hubs, and with only 1.6 h of lateness left ×32 prices that residue at roughly ₹12,800 of
+   search pressure against ₹410 of actual cost, while distance — ₹80,008 remaining, 11% captured —
+   is weighted at face value. **The data does not back it.** Over the 16 hubs, log₂(multiplier)
+   against generations-run comes out at Pearson +0.21 and Spearman +0.16 — weakly positive, where
+   that story predicts negative — and the one hub that relaxed all the way to ×1.00 ran the fewest
+   generations of all sixteen. It is not refuted either: n = 16, and multiplier is confounded with
+   hub size (stops against log₂(multiplier) is +0.49, because larger hubs have more windows to
+   miss).
+
+   A better fit, and one that does not depend on the multiplier at all: the incumbent is refreshed
+   from only the population's best-by-search-objective each generation, so any *other* individual
+   that would have improved it never gets re-priced and the stagnation counter runs up regardless.
+   Also untested. Step 7 measures before either knob moves; the GA's hyperparameters are not tuned
+   to chase a headline.
 
 9. **Guided local search under a wall-clock limit is not bit-reproducible.** It returns whatever
    it had reached when the clock ran out, so the same seed on a busier machine can yield a

@@ -264,14 +264,20 @@ Stated plainly in the README. Do not soften or omit them.
    236-stop hub — the one with the most to gain — stopped at 95. The header reading "GA 150×600"
    overstates the search actually performed by roughly 5×.
 
-   A candidate cause, **measured but not yet tested**: final penalty multipliers were x8–x32 on 15
-   of 16 hubs. With 1.6 h of lateness left in the plan, x32 prices that residue at ~₹12,800 of
-   search pressure against ₹410 of real cost, while distance — ₹80,008, and only 11% captured —
-   sits at true weight. Selection ranks on that distorted objective while the incumbent is tracked
-   at configured rates, so improvements to a term worth 0.2% of total cost need not move the
-   incumbent, and the stagnation counter climbs. The experiment that would settle it is one hub at
-   `penalty_max_multiplier=1.0`, watching whether generations-run rises. Step 7's, not step 6's:
-   neither `stagnation_limit` nor `generations` is tuned to chase a number.
+   The first candidate cause was penalty distortion: final multipliers were x8–x32 on 15 of 16
+   hubs, and with only 1.6 h of lateness left x32 prices that residue at ~₹12,800 of search
+   pressure against ₹410 of real cost, while distance — ₹80,008, 11% captured — sits at true
+   weight. **The seed-42 data does not support it.** Across the 16 hubs, log2(multiplier) against
+   generations-run is Pearson +0.21 / Spearman +0.16 — weakly *positive*, where that mechanism
+   predicts negative — and the single x1.00 hub ran the fewest generations of all sixteen. Not a
+   refutation either: n=16, and multiplier is confounded with hub size (stops vs log2(multiplier)
+   is +0.49, since larger hubs have more windows to miss).
+
+   A mechanism the data fits better, and which is **not** multiplier-dependent: `_configured_best`
+   re-prices only the population's champion-by-search-objective each generation, so any other
+   individual that would have improved the incumbent is invisible to it and the stagnation counter
+   climbs anyway. Untested. Neither `stagnation_limit` nor `generations` is tuned to chase a
+   number, and step 7 should measure before either moves.
 
 6. OR-Tools optimises a **static** arc cost using the dispatch-hour traffic multiplier, because a
    `RoutingModel` fixes arc costs before searching. The cumulative band-blended model still
