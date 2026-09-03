@@ -85,8 +85,8 @@ def test_the_comparison_table_has_a_row_per_reported_measure() -> None:
     solution = solve_pipeline(instance, matrices, traffic, unconstrained, SMALL)
     metrics = evaluate_solution(solution, instance, SMALL.cost)
 
-    lines = comparison_lines(metrics, metrics)
-    assert len(lines) == 9
+    lines = comparison_lines(metrics, metrics, SMALL.cost)
+    assert len(lines) == 13
     assert lines[0].split() == ["greedy", "pipeline", "change"]
     assert all("+0.0%" in line for line in lines[2:] if "—" not in line)
 

@@ -128,6 +128,16 @@ def test_the_result_is_a_chromosome_the_split_accepts() -> None:
     assert split(outcome.permutation, context).search_objective_inr == outcome.objective_inr
 
 
+def test_the_outcome_is_tagged_with_the_hub_it_belongs_to() -> None:
+    """Results come back from the pool in completion order, so they must identify themselves.
+
+    An untagged outcome reassembled against the wrong hub's workload yields a complete,
+    capacity-legal plan that delivers to the wrong customers — the expensive kind of wrong.
+    """
+    context = make_context(6)
+    assert evolve(context, SMALL_GA, np.random.default_rng(1)).hub_id == context.workload.hub_id
+
+
 def test_the_reported_objective_is_priced_at_the_configured_rates() -> None:
     """The adaptive multiplier must not reach the number the run reports.
 

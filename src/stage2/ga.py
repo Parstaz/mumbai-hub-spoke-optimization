@@ -78,8 +78,15 @@ class Incumbent:
 
 @dataclass(frozen=True, slots=True)
 class HubOutcome:
-    """What one hub's run produced, and enough context to report on the run itself."""
+    """What one hub's run produced, and enough context to report on the run itself.
 
+    ``hub_id`` is carried rather than inferred from position because results come back from the
+    pool in completion order, not hub order — see :func:`~src.stage2.solve._solve_all`. Without it
+    a plan could be reassembled against the wrong hub's workload, which produces a complete,
+    capacity-legal plan that delivers to the wrong customers.
+    """
+
+    hub_id: int
     permutation: Permutation
     objective_inr: Rupees
     """Priced at the configured rates, so this is comparable across runs and across hubs."""
@@ -128,9 +135,22 @@ def evolve(context: SplitContext, ga: GAConfig, rng: np.random.Generator) -> Hub
             penalty = penalty.adapt(_violating_fraction(population, session), ga)
             population = tuple(_score(one.permutation, session, penalty) for one in population)
         if stagnant >= ga.stagnation_limit:
-            return HubOutcome(best.permutation, best.objective_inr, generation, penalty.multiplier)
+            return _outcome(session, best, generation, penalty)
 
-    return HubOutcome(best.permutation, best.objective_inr, ga.generations, penalty.multiplier)
+    return _outcome(session, best, ga.generations, penalty)
+
+
+def _outcome(
+    session: Session, best: Incumbent, generations: int, penalty: AdaptivePenalty
+) -> HubOutcome:
+    """Package a finished run, tagged with the hub it belongs to."""
+    return HubOutcome(
+        hub_id=session.context.workload.hub_id,
+        permutation=best.permutation,
+        objective_inr=best.objective_inr,
+        generations_run=generations,
+        final_multiplier=penalty.multiplier,
+    )
 
 
 def _rates(session: Session, penalty: AdaptivePenalty) -> SplitContext:

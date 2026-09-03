@@ -29,7 +29,7 @@ from collections.abc import Sequence
 from src.baseline.greedy import solve_baseline
 from src.cli.run_baseline import context_lines
 from src.cli.run_stage1 import STRATEGIES
-from src.config import Config, GAConfig, RunConfig, Stage1Config
+from src.config import Config, CostConfig, GAConfig, RunConfig, Stage1Config
 from src.costs.matrix import CostMatrices, build_matrices
 from src.costs.traffic import TrafficModel
 from src.data.generate import generate_instance
@@ -121,11 +121,33 @@ def solve_pipeline(
     return Solution(stage1_routes=inbound, stage2_routes=outbound)
 
 
-def comparison_lines(baseline: Metrics, optimized: Metrics) -> list[str]:
-    """Render the two columns and the delta between them, headline first."""
+def comparison_lines(baseline: Metrics, optimized: Metrics, cost: CostConfig) -> list[str]:
+    """Render the two columns and the delta between them, headline first.
+
+    The four cost components sit directly under the total because *where* the improvement came
+    from is the question this table exists to answer. Step 4 measured the baseline's pools as
+    distance 36.4% and lateness 9.6%, so a pipeline winning almost entirely on lateness is
+    attacking the smaller one and is worth knowing about — the components say which it is, and the
+    headline alone does not.
+    """
+    greedy, pipeline = baseline.breakdown, optimized.breakdown
     rows = (
         ("cost per drop ₹", baseline.cost_per_drop_inr, optimized.cost_per_drop_inr, ",.2f"),
         ("total cost ₹", baseline.total_cost_inr, optimized.total_cost_inr, ",.0f"),
+        (
+            f"  variable ₹{cost.variable_per_km:g}/km",
+            greedy.variable_inr,
+            pipeline.variable_inr,
+            ",.0f",
+        ),
+        (f"  driver ₹{cost.driver_per_hour:g}/h", greedy.driver_inr, pipeline.driver_inr, ",.0f"),
+        (f"  fixed ₹{cost.fixed_per_vehicle:g}/veh", greedy.fixed_inr, pipeline.fixed_inr, ",.0f"),
+        (
+            f"  late ₹{cost.tw_penalty_per_hour:g}/h",
+            greedy.tw_penalty_inr,
+            pipeline.tw_penalty_inr,
+            ",.0f",
+        ),
         ("distance km", baseline.total_distance_km, optimized.total_distance_km, ",.1f"),
         ("duration h", baseline.total_duration_hr, optimized.total_duration_hr, ",.1f"),
         ("vehicle-days", float(baseline.vehicles_used), float(optimized.vehicles_used), ",.0f"),
@@ -183,7 +205,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"{'' if config.ga.local_search_pct else ', no local search'}"
     )
     print(f"  {'solve time':<{_LABEL_WIDTH}}{elapsed_s:,.1f} s\n")
-    for line in comparison_lines(baseline, optimized):
+    for line in comparison_lines(baseline, optimized, config.cost):
         print(f"  {line}")
     print()
     return 0

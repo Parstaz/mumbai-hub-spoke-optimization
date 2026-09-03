@@ -199,6 +199,23 @@ def test_the_pool_and_the_sequential_path_agree() -> None:
     assert [route.nodes for route in sequential] == [route.nodes for route in pooled]
 
 
+def test_a_plan_is_reassembled_against_its_own_hub() -> None:
+    """The pool yields results as hubs finish, so pairing is by hub id rather than by position.
+
+    Asserted through the outcome the guard protects: every delivered customer belongs to the hub
+    whose tour carries it. A mispairing survives capacity and completeness checks and shows up
+    only here.
+    """
+    config = small_config(workers=2)
+    instance, matrices, traffic = build(config)
+    inbound = inbound_leg(instance, matrices, traffic, config)
+    customer_hubs = hub_of_customer(instance, hub_of_source(instance, inbound))
+    offset = len(instance.hubs) + len(instance.sources)
+    for route in solve_stage2(instance, matrices, traffic, customer_hubs, config):
+        for node in route.interior_nodes:
+            assert customer_hubs[int(node) - offset] == route.hub_id
+
+
 # --------------------------------------------------------------------------------------------
 # What a worker is allowed to know
 # --------------------------------------------------------------------------------------------

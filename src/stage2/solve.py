@@ -39,6 +39,7 @@ from src.config import SECONDS_PER_HOUR, Config, CostConfig, GAConfig
 from src.costs.matrix import CostMatrices
 from src.costs.traffic import TrafficModel
 from src.data.instance import Instance
+from src.exceptions import InfeasibleSolutionError
 from src.solution import Route
 from src.stage2.ga import HubOutcome, evolve
 from src.stage2.pricing import HubPricing, hub_pricing
@@ -113,16 +114,26 @@ def solve_stage2(
             pricing=hub_pricing(workload, instance),
             cost_config=config.cost,
         )
+        if outcome.hub_id != workload.hub_id:
+            raise InfeasibleSolutionError(
+                f"hub {workload.hub_id}'s workload was paired with hub {outcome.hub_id}'s plan"
+            )
         routes.extend(split(outcome.permutation, context).routes)
-        logger.info(
-            "hub %d: %d stops, %d generations, penalty x%.2f, objective %.0f INR",
-            workload.hub_id,
-            len(workload.nodes),
-            outcome.generations_run,
-            outcome.final_multiplier,
-            outcome.objective_inr,
-        )
     return tuple(routes)
+
+
+def _log_finished(outcome: HubOutcome, done: int, total: int) -> None:
+    """Report one hub the moment it lands, so a long solve is not silent while it runs."""
+    logger.info(
+        "hub %2d done (%2d/%d): %3d stops, %d generations, penalty x%.2f, %.0f INR",
+        outcome.hub_id,
+        done,
+        total,
+        len(outcome.permutation),
+        outcome.generations_run,
+        outcome.final_multiplier,
+        outcome.objective_inr,
+    )
 
 
 def hub_of_source(instance: Instance, inbound_routes: tuple[Route, ...]) -> NodeArray:
@@ -201,14 +212,27 @@ def _solve_all(tasks: tuple[Stage2Task, ...], workers: int) -> tuple[HubOutcome,
 
     A single hub, or a pool of one, takes the sequential path — the only one whose result a test
     can compare against a pool's, and the one that keeps a small run free of interpreter start-up.
-    ``pool.map`` preserves input order, so both paths return identically ordered results, and the
-    per-hub seed makes the answer independent of which worker picked up which hub.
+    Both paths return results in hub order and both log each hub as it lands; the per-hub seed
+    makes the answer independent of which worker picked up which hub, and therefore of the order
+    they come back in.
     """
     count = _worker_count(workers)
     if len(tasks) <= 1 or count == 1:
-        return tuple(solve_hub_ga(task) for task in tasks)
+        finished = []
+        for task in tasks:
+            finished.append(solve_hub_ga(task))
+            _log_finished(finished[-1], len(finished), len(tasks))
+        return tuple(finished)
+
     with multiprocessing.get_context("spawn").Pool(processes=count) as pool:
-        return tuple(pool.map(solve_hub_ga, tasks))
+        finished = []
+        # imap_unordered rather than map: a result is yielded the moment its hub finishes, so a
+        # long run reports progress instead of going silent until the slowest hub returns. Order
+        # is restored by hub id afterwards, which is why HubOutcome carries one.
+        for outcome in pool.imap_unordered(solve_hub_ga, tasks):
+            finished.append(outcome)
+            _log_finished(outcome, len(finished), len(tasks))
+    return tuple(sorted(finished, key=lambda outcome: outcome.hub_id))
 
 
 def _worker_count(workers: int) -> int:
