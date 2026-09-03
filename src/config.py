@@ -341,6 +341,7 @@ class GAConfig:
     local_search_max_passes: int = 4
     stagnation_limit: int = 75
     or_opt_max_segment_stops: int = 3
+    seeded_individuals: int = 3
 
     penalty_adapt_interval: int = 10
     penalty_target_violation_rate: float = 0.10
@@ -367,6 +368,10 @@ class GAConfig:
         _require(0.0 <= self.local_search_pct <= 1.0, "local_search_pct must be in [0, 1]")
         _require(self.local_search_max_passes > 0, "local_search_max_passes must be positive")
         _require(self.stagnation_limit > 0, "stagnation_limit must be positive")
+        _require(
+            0 <= self.seeded_individuals <= self.population_size,
+            "seeded_individuals must fit inside the population",
+        )
         _require(self.penalty_adapt_interval > 0, "penalty_adapt_interval must be positive")
         _require(
             0.0 <= self.penalty_target_violation_rate <= 1.0,

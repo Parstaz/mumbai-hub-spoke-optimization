@@ -232,6 +232,25 @@ class TourPricer:
             pass
         return self._closed_weight(legs_m, n_stops, stop, arrival_s, lateness_s)
 
+    def whole_lateness_s(self) -> Seconds:
+        """Total seconds by which this tour misses its customers' windows.
+
+        Falls out of the same walk that prices it, which is why it is here rather than computed
+        again somewhere else. The adaptive penalty needs to know how much of the population is
+        missing windows, and a per-hub worker has no :class:`~src.data.instance.Instance` to reach
+        :func:`~src.scoring.route_window_outcome` through.
+
+        A tour with no stops is not late, so this returns zero rather than raising — unlike
+        :meth:`whole_weight`, which would have to invent a vehicle to charge for.
+        """
+        n_stops = len(self.tour.windows)
+        if n_stops == 0:
+            return Seconds(0.0)
+        lateness_s = 0.0
+        for _, _, lateness_s in self._advance(0, n_stops, self._leg_buffer(0)):  # noqa: B007
+            pass
+        return Seconds(lateness_s)
+
     def _leg_buffer(self, start: int) -> Legs:
         """A scratch vector for one pass's leg distances, with the hub-to-first leg already in it.
 
