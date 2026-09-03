@@ -204,6 +204,15 @@ Stated plainly, and not softened anywhere else in the repository:
    the negative result is the interesting half of the ablation. `make stage1` prints all three
    columns side by side and states the verdict from the numbers.
 
+   **That verdict is about the inbound leg alone, and step 6 found something it could not see.** A
+   customer is served from the hub its parcel reached, so the assignment propagates: balancing
+   also cuts Stage 2's largest hub from **236 stops to 73** (median 36 → 58). That is not just
+   cheaper to price. For a fixed generation budget a flatter distribution is a smaller search
+   space per stop, so equal GA effort buys more optimisation. Whether it pays back the 1.7% is
+   **step 7's question and is not answered here** — `make run --strategy {nearest,balanced}`
+   carries the flag through both stages so the ablation can measure it end to end. Read the total
+   cost per drop, not the two legs separately: reading them separately is what hid this.
+
 7. **OR-Tools optimises a static arc cost.** A `RoutingModel` fixes arc costs before the search
    begins, so the cumulative traffic model cannot live inside it; Stage 1's arc cost uses the
    dispatch-hour multiplier as a stand-in. Every *reported* distance, duration and arrival time

@@ -249,6 +249,16 @@ Stated plainly in the README. Do not soften or omit them.
    monotonically. The mechanism: the vehicle floor is set by mass, and mass is not what makes an
    inbound tour expensive — geography is, so relocating a source to a less-loaded hub buys a
    longer radial leg for nothing. Reported, not tuned away. `make stage1` prints the column.
+
+   **What that measurement could not see.** It is a statement about the *inbound* leg alone, and
+   it remains true as written. Composing the assignment through each shipment — a customer is
+   served from the hub its parcel reached — balancing also cuts Stage 2's largest hub from **236
+   stops to 73**, median 36 → 58. A flatter distribution is not merely faster to price: for a
+   fixed generation budget it is a smaller search space per stop, so equal GA effort buys more.
+   Whether that pays back the 1.7% is **step 7's question**, deliberately unresolved here;
+   `make run --strategy` is plumbed through both stages so the ablation can measure it end to end
+   rather than rediscover it. Read the *total* cost per drop, not the two legs separately —
+   reading them separately is what hid this.
 5. OR-Tools optimises a **static** arc cost using the dispatch-hour traffic multiplier, because a
    `RoutingModel` fixes arc costs before searching. The cumulative band-blended model still
    produces every reported figure, via `src/tour.py`. The proxy affects which tour is chosen, not
@@ -284,3 +294,9 @@ Append a line when the same mistake occurs twice. Do not add entries speculative
   whatever it reached when the clock ran out, so a busier machine yields a different plan. Tests
   must set `cvrp_solution_limit=1`, which stops at the first-solution heuristic and is
   independent of the time limit.
+- A tunable's **default and its justification get written in different files and drift**.
+  `penalty_min_multiplier` and `seeded_individuals` both landed in `config.py` with a value the
+  consuming module's docstring did not support — and in one case the docstring gave no reasoning
+  at all, so there was nothing for the default to contradict. When adding a field to a config
+  dataclass, write the number's argument in the module that *reads* it, and check the two agree
+  before committing. A default nobody can justify is a magic number with a longer name.
