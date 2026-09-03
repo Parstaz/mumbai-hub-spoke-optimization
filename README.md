@@ -5,10 +5,14 @@ network. Stage 1 consolidates ~300 sources into 16 hubs (OR-Tools CVRP + min-cos
 runs a hand-written genetic algorithm to deliver from those hubs to ~800 customers under capacity
 and time windows. The headline KPI is **cost per drop (₹/delivery)**.
 
-> **Build status.** This README currently documents the cost layer — the distance/duration
-> matrices and the traffic model — and the greedy nearest-neighbour baseline (step 3 of 9).
-> Neither optimized stage is built yet, so there is no comparison to report: the full write-up,
-> results tables and figures land with step 9.
+> **Build status.** Both stages are built (step 6 of 9). `make run` solves one seed end to end and
+> prints it against the greedy benchmark; on seed 42 under OSRM that is **₹309.01 → ₹264.63 per
+> drop, −14.4%**, at an unchanged 96 vehicle-days. The ablation (step 7), the OR-Tools reference
+> (step 8) and the multi-seed evaluation with its figures and full write-up (step 9) are still to
+> come, so treat that as one seed rather than a result — a single run has no error bar, and the
+> figure it is compared against comes from a solver whose inbound leg is not bit-reproducible.
+> This README currently documents the cost layer, the traffic model and the baseline in depth;
+> the two solvers are documented in their own modules until step 9.
 
 ---
 
@@ -219,7 +223,21 @@ Stated plainly, and not softened anywhere else in the repository:
    still comes from the cumulative band-blended model in `src/tour.py`. The proxy affects which
    tour is chosen, never what that tour is then said to cost.
 
-8. **Guided local search under a wall-clock limit is not bit-reproducible.** It returns whatever
+8. **The GA stops well short of its configured generation budget.** On seed 42 every hub ended
+   on `stagnation_limit = 75` rather than on `generations = 600` — between 76 and 463 generations,
+   median around 95, with the largest hub (236 stops) stopping at 95. The run header reads
+   "GA 150×600" and that overstates the search actually done by roughly 5×.
+
+   There is a measured candidate cause, and it is **not yet tested**. Final adaptive penalty
+   multipliers sat at ×8–×32 on 15 of 16 hubs. By then only 1.6 h of lateness remained, so ×32
+   prices that residue at roughly ₹12,800 of search pressure against ₹410 of actual cost — while
+   distance, where ₹80,008 remains and only 11% has been captured, is weighted at face value.
+   Selection ranks on that distorted objective while the incumbent is tracked at configured rates,
+   so gains on a term worth 0.2% of total cost need not move the incumbent and the stagnation
+   counter runs up. One hub at `penalty_max_multiplier = 1.0` would settle it. That is step 7's
+   experiment; the GA's hyperparameters are not tuned to chase a headline.
+
+9. **Guided local search under a wall-clock limit is not bit-reproducible.** It returns whatever
    it had reached when the clock ran out, so the same seed on a busier machine can yield a
    different plan. Run `--deterministic` to stop at the first-solution heuristic, which is
    reproducible; the test suite does. Step 9's multi-seed evaluation reports a spread for this

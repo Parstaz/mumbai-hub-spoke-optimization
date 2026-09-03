@@ -228,7 +228,7 @@ A step is complete only when all of the following hold:
 - [x] 3 — greedy baseline
 - [x] 4 — Stage 1: hub assignment (nearest / min-cost-flow) + per-hub CVRP
 - [x] 5 — split procedure + property tests
-- [ ] 6 — Stage 2 GA: OX, or-opt, adaptive penalty, memetic 2-opt
+- [x] 6 — Stage 2 GA: OX, or-opt, adaptive penalty, memetic 2-opt
 - [ ] 7 — ablation: with vs without local search
 - [ ] 8 — OR-Tools reference solve
 - [ ] 9 — multi-seed evaluation, notebook, README
@@ -259,7 +259,21 @@ Stated plainly in the README. Do not soften or omit them.
    `make run --strategy` is plumbed through both stages so the ablation can measure it end to end
    rather than rediscover it. Read the *total* cost per drop, not the two legs separately —
    reading them separately is what hid this.
-5. OR-Tools optimises a **static** arc cost using the dispatch-hour traffic multiplier, because a
+5. **The GA does not reach its configured generation budget.** On seed 42 every hub stopped on
+   `stagnation_limit=75`, not on `generations=600`: 76 to 463 generations, median ~95, and the
+   236-stop hub — the one with the most to gain — stopped at 95. The header reading "GA 150×600"
+   overstates the search actually performed by roughly 5×.
+
+   A candidate cause, **measured but not yet tested**: final penalty multipliers were x8–x32 on 15
+   of 16 hubs. With 1.6 h of lateness left in the plan, x32 prices that residue at ~₹12,800 of
+   search pressure against ₹410 of real cost, while distance — ₹80,008, and only 11% captured —
+   sits at true weight. Selection ranks on that distorted objective while the incumbent is tracked
+   at configured rates, so improvements to a term worth 0.2% of total cost need not move the
+   incumbent, and the stagnation counter climbs. The experiment that would settle it is one hub at
+   `penalty_max_multiplier=1.0`, watching whether generations-run rises. Step 7's, not step 6's:
+   neither `stagnation_limit` nor `generations` is tuned to chase a number.
+
+6. OR-Tools optimises a **static** arc cost using the dispatch-hour traffic multiplier, because a
    `RoutingModel` fixes arc costs before searching. The cumulative band-blended model still
    produces every reported figure, via `src/tour.py`. The proxy affects which tour is chosen, not
    what it is then said to cost.
