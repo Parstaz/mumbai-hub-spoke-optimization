@@ -223,24 +223,28 @@ Stated plainly, and not softened anywhere else in the repository:
    still comes from the cumulative band-blended model in `src/tour.py`. The proxy affects which
    tour is chosen, never what that tour is then said to cost.
 
-8. **The GA stops well short of its configured generation budget — and measurement says that is
-   correct, not a defect.** On seed 42 every hub ended on `stagnation_limit = 75` rather than on
-   `generations = 600`: between 76 and 463 generations, median around 95. The run header reports
-   generations used against the budget so the figure never has to be corrected further down.
+8. **The GA stops on its stagnation limit, and whether that means "converged" or "cut off"
+   depends on the hub.** On seed 42 every hub ended on `stagnation_limit = 75` rather than on
+   `generations = 600` — between 76 and 463 generations, median around 95. The run header reports
+   generations used against the budget, so the figure never needs correcting further down.
 
-   Two explanations were proposed for that, and `--trace-generations` killed both. Tracing hub 9 —
-   the largest, at 236 stops — flagged **0 of 95** generations in which the population contained a
-   plan better than the incumbent, so the GA is not losing improvements by re-pricing only its
-   search champion. The same run recorded **no duplicate children at all**, with 104 of 147 still
-   novel in the final ten generations, so the population is not collapsing either. What it shows
-   instead is 13 incumbent improvements, all before generation 27, followed by 68 generations in
-   which a healthy, diverse population found nothing better. The stagnation limit stopped a search
-   that had converged.
+   Two hubs were traced at full settings with `--trace-generations`, and they do not agree. **Hub
+   9** (236 stops, stopped at generation 95) had converged: 13 incumbent improvements, all before
+   generation 27, then 68 consecutive generations that found nothing. **Hub 0** (85 stops, stopped
+   at 463) was still improving — 44 improvements, the last at generation 388, tapering from 19 in
+   the first 57 generations to 5 across generations 342–399, with a longest dry spell of 52 that
+   repeatedly came close to the threshold and then recovered. Hub 0 stopped with 137 generations of
+   budget still unspent, so what ended it was the stagnation limit rather than the budget.
 
-   The consequence is that **the generation budget is not what limits the result** — the reach of
-   the operators and the local search is. Raising `generations` on a hub like this buys nothing.
-   Two caveats: that is one hub on one seed, and hub 0 ran for 463 generations, so how quickly a
-   hub converges plainly varies with its size and geometry.
+   Raising the budget would therefore buy nothing on a hub like 9 and might buy something on one
+   like 0 — and the split does not follow size, since the *larger* hub is the converged one.
+
+   The same traces killed both proposed explanations for stopping early. That the GA loses
+   improvements by re-pricing only its search champion: hub 9 flagged **0 of 95** generations, hub 0
+   **6 of 463**, and all six of those fell between generations 11 and 49 — none in the final 75,
+   which is the window that actually decides when a run stops. Real, rare, and beside the point.
+   That the population collapses: **no duplicate children on either hub at all**, with 104–115 of
+   147 still novel in the closing ten generations.
 
 9. **Guided local search under a wall-clock limit is not bit-reproducible.** It returns whatever
    it had reached when the clock ran out, so the same seed on a busier machine can yield a

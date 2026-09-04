@@ -259,29 +259,36 @@ Stated plainly in the README. Do not soften or omit them.
    `make run --strategy` is plumbed through both stages so the ablation can measure it end to end
    rather than rediscover it. Read the *total* cost per drop, not the two legs separately —
    reading them separately is what hid this.
-5. **The GA does not reach its configured generation budget, and does not need to.** On seed 42
-   every hub stopped on `stagnation_limit=75` rather than on `generations=600`: 76 to 463
-   generations, median ~95. The header now reports generations used against the budget, so a run
-   describes itself honestly.
+5. **The GA stops on `stagnation_limit`, and whether that is convergence or truncation is
+   per hub.** On seed 42 every hub ended on `stagnation_limit=75` rather than on
+   `generations=600`: 76 to 463 generations, median ~95. The header reports generations used
+   against the budget, so a run describes itself honestly.
 
-   **Measured, not assumed.** Two explanations were proposed and both are dead. A traced run of
-   hub 9 — the largest, 236 stops, `--trace-generations` — flagged **0 of 95** generations in which
-   the population held a plan better than the incumbent, killing the theory that
-   `_configured_best` re-pricing only the search champion loses improvements. It also recorded
-   **zero duplicate children throughout**, with 104 of 147 still fresh in the last ten generations,
-   killing the theory that the population collapses. What happened instead: 13 incumbent
-   improvements, all before generation 27, then 68 generations of a diverse population finding
-   nothing. `stagnation_limit` stopped a converged search, which is its job.
+   **Two hubs traced at full settings with `--trace-generations`, and they disagree.**
 
-   So the generation budget is **not** the binding lever on this hub, and raising it would buy
-   nothing. What limits the result is the reach of the operators and the local search, not the time
-   they are given. Two caveats before generalising: this is one hub on one seed, and hub 0 ran 463
-   generations, so convergence timing clearly varies.
+   * **Hub 9** (236 stops, stopped at 95) had **converged**. 13 incumbent improvements, all before
+     generation 27, then 68 consecutive dry generations. `stagnation_limit` stopped a search that
+     had nothing left to find.
+   * **Hub 0** (85 stops, stopped at 463) was **still improving**. 44 improvements, the last at
+     generation 388, at a declining but nonzero rate — 19 in the first 57 generations, still 5 in
+     generations 342–399 — with a longest dry spell of 52, repeatedly approaching the threshold and
+     recovering. It stopped with 137 generations of budget unspent, so what truncated it was
+     `stagnation_limit`, not `generations`.
 
-   **For step 7.** The ablation therefore compares *converged* searches rather than truncated ones,
-   at least on the hubs that behave like hub 9 — so "local search buys X%" is the stronger claim,
-   not a weaker one hedged by an early stop. Trace both arms and confirm it there rather than
-   assuming it carries.
+   So raising the budget buys nothing on a hub like 9 and might buy something on a hub like 0, and
+   the difference is not predictable from size alone — the *larger* hub is the converged one.
+
+   **Both proposed causes of early stopping are dead, on both hubs.** The theory that
+   `_configured_best` loses improvements by re-pricing only the search champion: hub 9 flagged 0 of
+   95 generations, hub 0 flagged 6 of 463 — and all six fell between generations 11 and 49, none in
+   the final 75, which is the window that decides the stop. Real, rare, and immaterial. The theory
+   that the population collapses: **zero duplicate children on either hub**, with 104–115 of 147
+   still fresh in the final ten generations. Re-pricing top *k* would fix nothing, and the guard is
+   not the problem.
+
+   **For step 7, the caveat is per hub, not global.** "Local search buys X%" is a clean claim on
+   hubs that converge, and a **lower bound** on hubs still improving when they stop. Trace both
+   arms rather than assuming either hub generalises, and report which hubs were in which state.
 
 6. OR-Tools optimises a **static** arc cost using the dispatch-hour traffic multiplier, because a
    `RoutingModel` fixes arc costs before searching. The cumulative band-blended model still
