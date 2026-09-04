@@ -242,9 +242,19 @@ Stated plainly, and not softened anywhere else in the repository:
    The same traces killed both proposed explanations for stopping early. That the GA loses
    improvements by re-pricing only its search champion: hub 9 flagged **0 of 95** generations, hub 0
    **6 of 463**, and all six of those fell between generations 11 and 49 — none in the final 75,
-   which is the window that actually decides when a run stops. Real, rare, and beside the point.
-   That the population collapses: **no duplicate children on either hub at all**, with 104–115 of
-   147 still novel in the closing ten generations.
+   which is the window that actually decides when a run stops. Real, rare, and beside the point *for
+   stopping* — though those six are genuine generations in which a cheaper plan sat in the
+   population uncaptured. That the population collapses: **no duplicate children on either hub at
+   all**, with 104–115 of 147 still novel in the closing ten generations.
+
+   Whether capturing those missed plans would have helped is checkable rather than arguable,
+   because the incumbent never feeds back into selection: the population evolves identically either
+   way, so re-pricing every individual would simply take the running minimum of the `population
+   min` the trace already records. On both hubs that comes to the final cost exactly — ₹29,172.6
+   and ₹14,986.9. Hub 0's six missed plans were at most ₹71.1 better than the incumbent of the day,
+   and the cheapest was ₹15,633 against its final ₹14,986.9. That is a measurement on two hubs, not
+   a guarantee: a missed plan changes the answer whenever it beats everything the run later
+   reaches.
 
 9. **Guided local search under a wall-clock limit is not bit-reproducible.** It returns whatever
    it had reached when the clock ran out, so the same seed on a busier machine can yield a

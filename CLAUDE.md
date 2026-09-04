@@ -281,10 +281,20 @@ Stated plainly in the README. Do not soften or omit them.
    **Both proposed causes of early stopping are dead, on both hubs.** The theory that
    `_configured_best` loses improvements by re-pricing only the search champion: hub 9 flagged 0 of
    95 generations, hub 0 flagged 6 of 463 — and all six fell between generations 11 and 49, none in
-   the final 75, which is the window that decides the stop. Real, rare, and immaterial. The theory
-   that the population collapses: **zero duplicate children on either hub**, with 104–115 of 147
-   still fresh in the final ten generations. Re-pricing top *k* would fix nothing, and the guard is
-   not the problem.
+   the final 75, which is the window that decides the stop. Real, rare, and immaterial *to stopping* — but those six
+   are genuine generations in which the population held a cheaper plan and the incumbent did not
+   take it. The theory that the population collapses: **zero duplicate children on either hub**,
+   with 104–115 of 147 still fresh in the final ten generations, so the guard is not the problem
+   either.
+
+   **Would re-pricing the top *k* have helped? Checked, not assumed — no, on both traces.** The
+   incumbent never feeds back into selection, breeding or local search, so the population sequence
+   is identical either way; top-*all* is therefore exactly the running minimum of the traced
+   `population min`. On both hubs that equals the actual final incumbent to the rupee. Hub 0's six
+   missed plans were at most ₹71.1 better than the incumbent of the day, and the cheapest ever
+   missed was ₹15,633 against a final ₹14,986.9. Note what this does *not* say: a missed plan
+   changes the answer whenever it beats everything the run later reaches. That did not happen on
+   these two hubs and is not ruled out in general.
 
    **For step 7, the caveat is per hub, not global.** "Local search buys X%" is a clean claim on
    hubs that converge, and a **lower bound** on hubs still improving when they stop. Trace both
