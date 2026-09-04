@@ -266,17 +266,30 @@ Stated plainly in the README. Do not soften or omit them.
 
    **Two hubs traced at full settings with `--trace-generations`, and they disagree.**
 
-   * **Hub 9** (236 stops, stopped at 95) had **converged**. 13 incumbent improvements, all before
-     generation 27, then 68 consecutive dry generations. `stagnation_limit` stopped a search that
-     had nothing left to find.
-   * **Hub 0** (85 stops, stopped at 463) was **still improving**. 44 improvements, the last at
-     generation 388, at a declining but nonzero rate — 19 in the first 57 generations, still 5 in
-     generations 342–399 — with a longest dry spell of 52, repeatedly approaching the threshold and
-     recovering. It stopped with 137 generations of budget unspent, so what truncated it was
-     `stagnation_limit`, not `generations`.
+   * **Hub 9** (236 stops, stopped at 95, penalty ended at **x32**) *looked* converged: 13
+     incumbent improvements, all before generation 27, then 68 dry generations. It was not. Re-run
+     on the same seed with the penalty **pinned at x1.00**, the same hub ran **313 generations to
+     ₹28,516.5** against ₹29,172.6 — **₹656 better**, 41 improvements, the last at generation 238.
+     Its apparent convergence was an artefact of the elevated multiplier.
+   * **Hub 0** (85 stops, stopped at 463, penalty ended at **x16**) was genuinely still improving:
+     44 improvements, the last at 388, tapering from 19 in the first 57 generations to 5 across
+     342–399, longest dry spell 52. It stopped with 137 generations of budget unspent, so
+     `stagnation_limit` truncated it rather than `generations`.
 
-   So raising the budget buys nothing on a hub like 9 and might buy something on a hub like 0, and
-   the difference is not predictable from size alone — the *larger* hub is the converged one.
+   **The mechanism, measured.** Selection ranks on the search objective; the incumbent is tracked
+   on the configured one. At a high multiplier those diverge enough that elitism carries the
+   search-best individual, which is *not* the configured-best — so the configured-best chromosome
+   is evicted from the population entirely. The trace shows this directly as ``population min``
+   drifting **above** the incumbent: **73 of 95 generations on hub 9 at x32, from generation 23
+   onward — and 0 of 313 with the penalty pinned, 0 of 463 on hub 0 at x16.** Once the best-known
+   plan is absent from the population, nothing in the population can improve the incumbent, and
+   the stagnation counter runs out on a search that has not actually finished.
+
+   So the multiplier is not merely priced-in guidance; above some threshold between x16 and x32 it
+   evicts the answer from the population. **This is one hub on one seed and is not a licence to
+   retune** — `penalty_max_multiplier` stays where step 1 put it until step 7 measures it across
+   hubs and seeds. What it does establish is that "the GA converged" cannot be read off an early
+   stop without checking the drift statistic.
 
    **Both proposed causes of early stopping are dead, on both hubs.** The theory that
    `_configured_best` loses improvements by re-pricing only the search champion: hub 9 flagged 0 of

@@ -228,16 +228,29 @@ Stated plainly, and not softened anywhere else in the repository:
    `generations = 600` — between 76 and 463 generations, median around 95. The run header reports
    generations used against the budget, so the figure never needs correcting further down.
 
-   Two hubs were traced at full settings with `--trace-generations`, and they do not agree. **Hub
-   9** (236 stops, stopped at generation 95) had converged: 13 incumbent improvements, all before
-   generation 27, then 68 consecutive generations that found nothing. **Hub 0** (85 stops, stopped
-   at 463) was still improving — 44 improvements, the last at generation 388, tapering from 19 in
-   the first 57 generations to 5 across generations 342–399, with a longest dry spell of 52 that
-   repeatedly came close to the threshold and then recovered. Hub 0 stopped with 137 generations of
-   budget still unspent, so what ended it was the stagnation limit rather than the budget.
+   Three traces at full settings with `--trace-generations`, and the first reading of them was
+   wrong. **Hub 9** (236 stops, stopped at generation 95, penalty ended at ×32) looked converged —
+   13 incumbent improvements, all before generation 27, then 68 generations that found nothing.
+   Re-running the same hub on the same seed with the penalty **pinned at ×1.00** ran **313
+   generations and reached ₹28,516.5 against ₹29,172.6 — ₹656 better**, with 41 improvements and
+   the last at generation 238. Its convergence was an artefact of the penalty, not a property of
+   the problem. **Hub 0** (85 stops, stopped at 463, penalty ended at ×16) was genuinely still
+   improving: 44 improvements tapering from 19 in the first 57 generations to 5 across 342–399,
+   the last at 388, and it stopped with 137 generations of budget unspent.
 
-   Raising the budget would therefore buy nothing on a hub like 9 and might buy something on one
-   like 0 — and the split does not follow size, since the *larger* hub is the converged one.
+   The mechanism is visible in the traces. Selection ranks plans at the adaptive rate while the
+   incumbent is tracked at the configured one, and at a high multiplier those are different enough
+   that elitism preserves the individual that is best *for the search* rather than the one that is
+   best *as reported* — so the best-known plan is evicted from the population. The trace shows it
+   as `population min` drifting above the incumbent: **73 of 95 generations on hub 9 at ×32, and 0
+   of 313 once the penalty is pinned, 0 of 463 on hub 0 at ×16.** With the best plan gone from the
+   population nothing can improve on it, and the stagnation counter expires on a search that had
+   not finished. Somewhere between ×16 and ×32 the guidance stops guiding and starts discarding
+   the answer.
+
+   That is one hub on one seed, and the multipliers stay as configured until step 7 measures this
+   across hubs and seeds. The transferable part is narrower: an early stop cannot be read as
+   "converged" without checking whether the best plan was still in the population when it happened.
 
    The same traces killed both proposed explanations for stopping early. That the GA loses
    improvements by re-pricing only its search champion: hub 9 flagged **0 of 95** generations, hub 0
