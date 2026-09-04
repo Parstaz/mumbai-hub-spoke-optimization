@@ -148,7 +148,7 @@ def evolve(context: SplitContext, ga: GAConfig, rng: np.random.Generator) -> Hub
     stagnant = 0
 
     for generation in range(1, ga.generations + 1):
-        bred, diversity = _repopulate(population, session, penalty)
+        bred, diversity = _repopulate(population, session, penalty, best)
         population = _refine_some(bred, session, penalty)
         champion = _configured_best(population, session)
         if champion.objective_inr < best.objective_inr:
@@ -271,12 +271,21 @@ def _is_late(individual: Individual, session: Session) -> bool:
 
 
 def _repopulate(
-    population: tuple[Individual, ...], session: Session, penalty: AdaptivePenalty
+    population: tuple[Individual, ...],
+    session: Session,
+    penalty: AdaptivePenalty,
+    incumbent: Incumbent,
 ) -> tuple[tuple[Individual, ...], DiversityCounts]:
     """Carry the elites through unchanged and breed the rest, rejecting clones.
 
     Elites are carried by chromosome rather than re-scored, so their recorded objective stays the
     one selection compared them on. A penalty change re-scores the whole population including them.
+
+    Elitism ranks by *search* objective, which under a high multiplier is not the configured one —
+    so the best-known plan can be evicted and never recovered, because the incumbent is otherwise
+    read-only from the search's point of view. :attr:`~src.config.GAConfig.reinject_incumbent`
+    carries it back in, at the cost of one split and one bred child per generation. Off by default;
+    it is an experiment, not a setting.
 
     The counts returned alongside are read-only bookkeeping: counting how each child was obtained
     changes nothing about which child is obtained.
@@ -284,6 +293,9 @@ def _repopulate(
     ranked = sorted(population, key=lambda one: one.objective_inr)
     survivors = list(ranked[: session.ga.elitism_count])
     seen = {one.permutation for one in survivors}
+    if session.ga.reinject_incumbent and incumbent.permutation not in seen:
+        survivors.append(_score(incumbent.permutation, session, penalty))
+        seen.add(incumbent.permutation)
     fresh = mutated = duplicate = 0
 
     while len(survivors) < session.ga.population_size:

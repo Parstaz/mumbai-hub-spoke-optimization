@@ -330,6 +330,13 @@ class GAConfig:
     of drops together, short enough that the move stays local and the tour it lands in is still
     recognisably the parent's.
 
+    ``reinject_incumbent`` is an **experiment, defaulted off.** Elitism carries the best
+    individual *by search objective*; when the adaptive multiplier is high that is not the best by
+    configured objective, so the best-known plan can be evicted from the population and nothing can
+    pull it back — the incumbent is read-only from the search's point of view. Setting this carries
+    the incumbent's chromosome back in each generation, which keeps the adaptive schedule while
+    removing the eviction. It is off until step 7 measures whether it pays across hubs and seeds.
+
     ``trace_generations`` is **diagnostic instrumentation, not a tunable.** It makes the GA report
     per generation whether its incumbent moved and whether anything in the population could have
     moved it, which is the direct test of §8.5's open question. It costs a full population re-price
@@ -351,6 +358,7 @@ class GAConfig:
     or_opt_max_segment_stops: int = 3
     seeded_individuals: int = 3
     trace_generations: bool = False
+    reinject_incumbent: bool = False
 
     penalty_adapt_interval: int = 10
     penalty_target_violation_rate: float = 0.10

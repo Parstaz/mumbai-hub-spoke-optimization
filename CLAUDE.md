@@ -285,6 +285,14 @@ Stated plainly in the README. Do not soften or omit them.
    plan is absent from the population, nothing in the population can improve the incumbent, and
    the stagnation counter runs out on a search that has not actually finished.
 
+   **The cheaper plan is not a less feasible one — checked.** Both finals are priced by the same
+   path at the configured ₹250/h, never at the search rate, and capacity is structural rather than
+   charged. Measured on hub 9: the pinned plan is better on *every* component — variable ₹10,782
+   against ₹11,211, driver ₹5,718 against ₹5,803, and **lateness ₹16.0 against ₹158.6**, 0.06 hours
+   against 0.63, at the same 2 violations. Both deploy 12 vehicles, the mass floor for 8,850 kg, so
+   neither saved anything on fixed cost, and both report zero over-capacity routes. The x32 schedule
+   produced the plan that was *worse at the thing the penalty exists to control*.
+
    So the multiplier is not merely priced-in guidance; above some threshold between x16 and x32 it
    evicts the answer from the population. **This is one hub on one seed and is not a licence to
    retune** — `penalty_max_multiplier` stays where step 1 put it until step 7 measures it across
