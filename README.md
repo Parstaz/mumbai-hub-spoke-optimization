@@ -248,6 +248,26 @@ Stated plainly, and not softened anywhere else in the repository:
    not finished. Somewhere between ×16 and ×32 the guidance stops guiding and starts discarding
    the answer.
 
+   Two follow-ups, both recorded because they narrow what the finding means. First, the cheaper
+   plan is not a less feasible one: both hub 9 finals are priced at the configured ₹250/h by the
+   same code path, capacity is structural rather than charged, and the pinned plan is better on
+   *every* component including lateness — ₹16.0 against ₹158.6, 0.06 hours against 0.63, at the
+   same two violations, both at the 12-vehicle mass floor with no over-capacity route. The ×32
+   schedule produced the plan that was worse at the thing the penalty exists to control. Second,
+   the eviction turns out to be a *consequence* rather than the cause: carrying the incumbent back
+   into the population each generation cuts drift from 73 of 95 generations to 8 and changes the
+   answer by nothing at all — same ₹29,172.6, same 13 improvements, same stop. The incumbent
+   plateaus at generation 20 and drift only starts at 23, so the population wanders because the
+   incumbent has frozen, not the reverse. What the multiplier distorts is selection, and that
+   experiment was withdrawn rather than kept.
+
+   **The blast radius, recorded and not yet chased.** If this holds beyond hub 9, then every hub
+   that finished run 1 at a high multiplier may have stopped early against a distorted objective —
+   and 15 of 16 ended at ×8 or above. The per-hub figures in that run, and therefore the −14.4%
+   headline built from them, would then be **lower bounds of unknown tightness** rather than
+   converged results. Nothing has been re-run on that basis yet; it is written down so step 7 sizes
+   it deliberately instead of inheriting it.
+
    That is one hub on one seed, and the multipliers stay as configured until step 7 measures this
    across hubs and seeds. The transferable part is narrower: an early stop cannot be read as
    "converged" without checking whether the best plan was still in the population when it happened.

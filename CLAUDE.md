@@ -293,6 +293,21 @@ Stated plainly in the README. Do not soften or omit them.
    neither saved anything on fixed cost, and both report zero over-capacity routes. The x32 schedule
    produced the plan that was *worse at the thing the penalty exists to control*.
 
+   **Eviction is a consequence, not the cause — tested and rejected.** Carrying the incumbent back
+   into the population each generation removes the drift (73 of 95 generations down to 8) and
+   changes the answer by **nothing**: same ₹29,172.6, same 13 improvements, same last improvement at
+   generation 20, same stop at 95. The timeline says why. The incumbent plateaus at generation 20;
+   drift does not begin until 23. The population wanders away *because* the incumbent has frozen,
+   not the other way round. What the elevated multiplier distorts is **selection**, and no amount of
+   bookkeeping around the incumbent repairs that — which is why the re-injection experiment was
+   withdrawn rather than kept.
+
+   **Blast radius, recorded and not yet chased.** If this holds beyond hub 9, every hub that ended
+   run 1 at a high multiplier may have stopped early against a distorted objective — and 15 of 16
+   ended at x8 or above. Those per-hub figures, and the −14.4% headline assembled from them, would
+   then be **lower bounds of unknown tightness** rather than converged results. Nothing is re-run on
+   that basis yet; it is written down so step 7 sizes it deliberately rather than inheriting it.
+
    So the multiplier is not merely priced-in guidance; above some threshold between x16 and x32 it
    evicts the answer from the population. **This is one hub on one seed and is not a licence to
    retune** — `penalty_max_multiplier` stays where step 1 put it until step 7 measures it across

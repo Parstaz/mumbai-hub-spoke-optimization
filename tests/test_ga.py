@@ -245,32 +245,6 @@ def test_tracing_reports_when_the_incumbent_missed_a_better_plan(
     assert all("incumbent" in line and "population min" in line for line in traced)
 
 
-def test_reinjection_keeps_the_best_known_plan_in_the_population() -> None:
-    """The eviction the flag exists to prevent, asserted through its symptom.
-
-    Elitism ranks by search objective, so under a high multiplier the configured-best chromosome
-    can be dropped and never recovered. Re-injection puts it back each generation, which shows up
-    as the population minimum never drifting above the incumbent.
-    """
-    impossible = TimeWindow(Seconds(8 * 3600.0), Seconds(8 * 3600.0 + 60.0))
-    context = make_context(10, (impossible,) * 10)
-    reinjecting = dataclasses.replace(SMALL_GA, trace_generations=True, reinject_incumbent=True)
-    with _capture("src.stage2.ga") as messages:
-        evolve(context, reinjecting, np.random.default_rng(17))
-    drifted = [
-        message
-        for message in messages
-        if (found := re.search(r"incumbent ([\d.]+), population min ([\d.]+)", message))
-        and float(found.group(2)) > float(found.group(1))
-    ]
-    assert not drifted, f"the incumbent was evicted despite re-injection: {drifted[:2]}"
-
-
-def test_reinjection_is_off_by_default() -> None:
-    """It is an experiment, not a setting: step 1's configuration stands until step 7 measures."""
-    assert GAConfig().reinject_incumbent is False
-
-
 def test_different_seeds_explore_differently() -> None:
     """If the seed did not matter, a multi-seed evaluation would be reporting one run n times."""
     context = make_context(12)
