@@ -245,6 +245,43 @@ def test_tracing_reports_when_the_incumbent_missed_a_better_plan(
     assert all("incumbent" in line and "population min" in line for line in traced)
 
 
+def test_warmup_holds_the_multiplier_at_one_for_its_span() -> None:
+    """The schedule must not adapt at all while the warm-up is in force.
+
+    Windows here are unmeetable, so an unwarmed schedule climbs immediately — which is what makes
+    the assertion meaningful rather than vacuous.
+    """
+    impossible = TimeWindow(Seconds(8 * 3600.0), Seconds(8 * 3600.0 + 60.0))
+    context = make_context(8, (impossible,) * 8)
+    warmed = dataclasses.replace(
+        SMALL_GA, trace_generations=True, penalty_warmup_generations=SMALL_GA.generations
+    )
+    with _capture("src.stage2.ga") as messages:
+        outcome = evolve(context, warmed, np.random.default_rng(23))
+    multipliers = {
+        found.group(1)
+        for message in messages
+        if (found := re.search(r"penalty x([\d.]+)", message))
+    }
+    assert multipliers == {"1.00"}, f"the schedule adapted during warm-up: {sorted(multipliers)}"
+    assert outcome.final_multiplier == pytest.approx(1.0)
+
+
+def test_no_warmup_leaves_the_schedule_as_configured() -> None:
+    """Zero is the default and must be a true no-op, or every earlier run is incomparable."""
+    impossible = TimeWindow(Seconds(8 * 3600.0), Seconds(8 * 3600.0 + 60.0))
+    context = make_context(8, (impossible,) * 8)
+    assert GAConfig().penalty_warmup_generations == 0
+    plain = evolve(context, SMALL_GA, np.random.default_rng(23))
+    explicit = evolve(
+        context,
+        dataclasses.replace(SMALL_GA, penalty_warmup_generations=0),
+        np.random.default_rng(23),
+    )
+    assert plain == explicit
+    assert plain.final_multiplier > 1.0, "the fixture is meant to make the schedule climb"
+
+
 def test_different_seeds_explore_differently() -> None:
     """If the seed did not matter, a multi-seed evaluation would be reporting one run n times."""
     context = make_context(12)

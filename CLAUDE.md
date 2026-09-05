@@ -308,8 +308,17 @@ Stated plainly in the README. Do not soften or omit them.
    then be **lower bounds of unknown tightness** rather than converged results. Nothing is re-run on
    that basis yet; it is written down so step 7 sizes it deliberately rather than inheriting it.
 
-   So the multiplier is not merely priced-in guidance; above some threshold between x16 and x32 it
-   evicts the answer from the population. **This is one hub on one seed and is not a licence to
+   **The "threshold between x16 and x32" reading was wrong, and is retracted.** It compared the
+   multipliers each run *ended* at, which is the wrong variable. The schedule caps the multiplier at
+   `2 ** floor(g / penalty_adapt_interval)`, so it cannot exceed **x4 by generation 20** or reach
+   x32 before **generation 50** — and hub 9's improvements all occurred at or below x4. Endpoint
+   multipliers describe where a run finished, not the conditions under which it stopped improving.
+   What the evidence actually supports is *path dependence*: a low multiplier helped when it was low
+   early (pinned x1.00, improving to generation 238) and did not help when it arrived late (the
+   re-injection run ended at x8 and found nothing after generation 20), while hub 0 sat at x16 and
+   improved to 388. The candidate fix is therefore a **warm-up floor** on the schedule, not a cap.
+   `GAConfig.penalty_warmup_generations` exists to measure that; it defaults to 0, the schedule as
+   step 1 wrote it. **This is one hub on one seed and is not a licence to
    retune** — `penalty_max_multiplier` stays where step 1 put it until step 7 measures it across
    hubs and seeds. What it does establish is that "the GA converged" cannot be read off an early
    stop without checking the drift statistic.

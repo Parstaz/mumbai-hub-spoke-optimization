@@ -7,7 +7,10 @@ and time windows. The headline KPI is **cost per drop (₹/delivery)**.
 
 > **Build status.** Both stages are built (step 6 of 9). `make run` solves one seed end to end and
 > prints it against the greedy benchmark; on seed 42 under OSRM that is **₹309.01 → ₹264.63 per
-> drop, −14.4%**, at an unchanged 96 vehicle-days. The ablation (step 7), the OR-Tools reference
+> drop, −14.4%**, at an unchanged 96 vehicle-days. **Treat that as a lower bound, not a result.**
+> 15 of the 16 hubs finished that run at an adaptive penalty of ×8 or above, and hub 9 has been
+> shown to leave ₹656 on the table under exactly that condition (limitation 8). The figure is
+> re-measured at step 9 once the penalty schedule is settled. The ablation (step 7), the OR-Tools reference
 > (step 8) and the multi-seed evaluation with its figures and full write-up (step 9) are still to
 > come, so treat that as one seed rather than a result — a single run has no error bar, and the
 > figure it is compared against comes from a solver whose inbound leg is not bit-reproducible.
@@ -245,8 +248,12 @@ Stated plainly, and not softened anywhere else in the repository:
    as `population min` drifting above the incumbent: **73 of 95 generations on hub 9 at ×32, and 0
    of 313 once the penalty is pinned, 0 of 463 on hub 0 at ×16.** With the best plan gone from the
    population nothing can improve on it, and the stagnation counter expires on a search that had
-   not finished. Somewhere between ×16 and ×32 the guidance stops guiding and starts discarding
-   the answer.
+   not finished. An earlier draft of this section read that as a threshold between ×16 and ×32; that
+   was wrong and is withdrawn. It compared the multipliers each run *ended* at, when the schedule
+   caps the multiplier at 2^⌊g/10⌋ — it cannot exceed ×4 by generation 20 or reach ×32 before
+   generation 50, and hub 9's improvements all happened at or below ×4. What the evidence supports
+   is path dependence: a low multiplier helped when it was low *early* and did not when it arrived
+   late. The candidate fix is a warm-up floor on the schedule rather than a cap.
 
    Two follow-ups, both recorded because they narrow what the finding means. First, the cheaper
    plan is not a less feasible one: both hub 9 finals are priced at the configured ₹250/h by the

@@ -330,6 +330,13 @@ class GAConfig:
     of drops together, short enough that the move stays local and the tour it lands in is still
     recognisably the parent's.
 
+    ``penalty_warmup_generations`` holds the multiplier at 1.0 for that many generations before
+    the schedule starts adapting. Zero — the default — is the schedule as step 1 wrote it. It exists
+    because over-strict penalties are a known failure mode in constrained metaheuristics
+    (Michalewicz & Schoenauer, 1996): a penalty steep enough to fence the search out of mildly
+    infeasible territory also blocks the route *through* that territory to better feasible regions,
+    and the early generations are when a population commits to a basin.
+
     ``trace_generations`` is **diagnostic instrumentation, not a tunable.** It makes the GA report
     per generation whether its incumbent moved and whether anything in the population could have
     moved it, which is the direct test of §8.5's open question. It costs a full population re-price
@@ -353,6 +360,7 @@ class GAConfig:
     trace_generations: bool = False
 
     penalty_adapt_interval: int = 10
+    penalty_warmup_generations: int = 0
     penalty_target_violation_rate: float = 0.10
     penalty_step: float = 2.0
     penalty_min_multiplier: float = 1.0
@@ -382,6 +390,10 @@ class GAConfig:
             "seeded_individuals must fit inside the population",
         )
         _require(self.penalty_adapt_interval > 0, "penalty_adapt_interval must be positive")
+        _require(
+            self.penalty_warmup_generations >= 0,
+            "penalty_warmup_generations must be >= 0 (0 means adapt from the first interval)",
+        )
         _require(
             0.0 <= self.penalty_target_violation_rate <= 1.0,
             "penalty_target_violation_rate must be in [0, 1]",

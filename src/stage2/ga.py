@@ -119,6 +119,21 @@ class DiversityCounts:
 
 
 @dataclass(frozen=True, slots=True)
+class GenerationTrace:
+    """One generation's diagnostic state, bundled rather than threaded.
+
+    Exists because the logger needs the generation, the penalty in force and the diversity counts
+    together, and passing them alongside the session, population and incumbent puts the function
+    over §2.2's five-parameter limit. Grouping the three that describe *this generation* is the
+    honest split: they vary together and mean nothing apart.
+    """
+
+    generation: int
+    penalty: AdaptivePenalty
+    diversity: DiversityCounts
+
+
+@dataclass(frozen=True, slots=True)
 class Session:
     """The per-hub constants of one run. ``context`` holds the *configured* rates, never scaled."""
 
@@ -156,8 +171,16 @@ def evolve(context: SplitContext, ga: GAConfig, rng: np.random.Generator) -> Hub
         else:
             stagnant += 1
         if ga.trace_generations:
-            _log_generation(session, population, best, generation, diversity)
-        if generation % ga.penalty_adapt_interval == 0:
+            _log_generation(
+                session,
+                population,
+                best,
+                GenerationTrace(generation=generation, penalty=penalty, diversity=diversity),
+            )
+        if (
+            generation % ga.penalty_adapt_interval == 0
+            and generation > ga.penalty_warmup_generations
+        ):
             penalty = penalty.adapt(_violating_fraction(population, session), ga)
             population = tuple(_score(one.permutation, session, penalty) for one in population)
         if stagnant >= ga.stagnation_limit:
@@ -183,8 +206,7 @@ def _log_generation(
     session: Session,
     population: tuple[Individual, ...],
     best: Incumbent,
-    generation: int,
-    diversity: DiversityCounts,
+    trace: GenerationTrace,
 ) -> None:
     """Report whether the incumbent moved, and whether anything could have moved it.
 
@@ -206,15 +228,16 @@ def _log_generation(
         float(split(one.permutation, session.context).search_objective_inr) for one in population
     )
     logger.info(
-        "hub %d gen %d: incumbent %.1f, population min %.1f, "
+        "hub %d gen %d: penalty x%.2f, incumbent %.1f, population min %.1f, "
         "children %d fresh / %d mutated / %d duplicate%s",
         session.context.workload.hub_id,
-        generation,
+        trace.generation,
+        trace.penalty.multiplier,
         best.objective_inr,
         cheapest,
-        diversity.fresh,
-        diversity.mutated,
-        diversity.duplicate,
+        trace.diversity.fresh,
+        trace.diversity.mutated,
+        trace.diversity.duplicate,
         "  <- incumbent missed a better plan" if cheapest < best.objective_inr else "",
     )
 
