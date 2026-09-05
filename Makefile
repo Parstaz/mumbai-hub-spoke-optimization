@@ -5,6 +5,11 @@ PYTEST := .venv/bin/pytest
 
 SEED ?= 42
 
+# Extra flags for the run targets: `make run ARGS="--strategy balanced"`. Needed because make
+# claims any bare `--flag` on its own command line as one of its own options and exits, so
+# `make run --strategy balanced` fails with "unrecognized option" rather than reaching Python.
+ARGS ?=
+
 # 5001 rather than OSRM's conventional 5000: macOS holds 5000 with the AirPlay Receiver unless
 # it is disabled in System Settings > General > AirDrop & Handoff, so 5000 fails on a fresh
 # clone on every Mac. Override to get it back: `OSRM_PORT=5000 make osrm-up providers`.
@@ -20,7 +25,7 @@ OSRM_PBF := $(OSRM_DIR)/maharashtra-latest.osm.pbf
 # indistinguishable from a download to anything that does not check what it received.
 OSRM_EXTRACT_URL := https://download.openstreetmap.fr/extracts/asia/india/maharashtra-latest.osm.pbf
 
-.PHONY: data providers baseline stage1 run osrm osrm-up osrm-down lint format check types unit cov test
+.PHONY: data providers baseline stage1 run ablation osrm osrm-up osrm-down lint format check types unit cov test
 
 ## generate a seeded synthetic instance, print summary stats, render the scatter plot
 data:
@@ -36,11 +41,15 @@ baseline:
 
 ## stage 1 inbound leg: greedy baseline vs the CVRP under each hub assignment strategy
 stage1:
-	$(PY) -m src.cli.run_stage1 --seed $(SEED) --osrm-url http://127.0.0.1:$(OSRM_PORT)
+	$(PY) -m src.cli.run_stage1 --seed $(SEED) --osrm-url http://127.0.0.1:$(OSRM_PORT) $(ARGS)
 
 ## full Stage 1 + Stage 2 pipeline on one seed, printed against the greedy baseline
 run:
-	$(PY) -m src.cli.run_pipeline --seed $(SEED) --osrm-url http://127.0.0.1:$(OSRM_PORT)
+	$(PY) -m src.cli.run_pipeline --seed $(SEED) --osrm-url http://127.0.0.1:$(OSRM_PORT) $(ARGS)
+
+## step 7's 2x2: memetic local search on/off x nearest/balanced, read on total cost per drop
+ablation:
+	$(PY) -m src.cli.run_ablation --seed $(SEED) --osrm-url http://127.0.0.1:$(OSRM_PORT) $(ARGS)
 
 ## one-time OSRM setup: download the extract, then extract -> partition -> customize -> routed.
 ## Takes 15-30 minutes and roughly 4 GB of RAM; the artefacts persist in $(OSRM_DIR).
