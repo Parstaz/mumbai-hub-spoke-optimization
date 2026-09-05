@@ -8,15 +8,26 @@ reader will quote.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
-from src.cli.run_pipeline import _delta, budget_lines, comparison_lines, main, solve_pipeline
+from src.cli.run_pipeline import (
+    budget_lines,
+    comparison_lines,
+    delta,
+    generations_used,
+    main,
+    solve_pipeline,
+)
 from src.config import Config, GAConfig, GeoConfig, RunConfig, Stage1Config
 from src.costs.matrix import CostMatrices, HaversineProvider
 from src.costs.traffic import TrafficModel
 from src.data.generate import generate_instance
 from src.scoring import evaluate_solution
 from src.stage1.assignment import unconstrained
+from src.stage2.ga import HubOutcome
+from src.units import Rupees
 
 SMALL = Config(
     geo=GeoConfig(
@@ -71,7 +82,7 @@ def test_the_delta_column_reads_negative_for_an_improvement(
     The zero-baseline case is the one that matters: a baseline with no window violations at all
     would otherwise divide by zero while rendering a table.
     """
-    assert _delta(before, after) == expected
+    assert delta(before, after) == expected
 
 
 def test_the_comparison_table_has_a_row_per_reported_measure() -> None:
@@ -114,7 +125,32 @@ def test_the_budget_line_reports_what_was_used_not_what_was_configured() -> None
 
 def test_the_budget_line_is_empty_when_no_hub_ran() -> None:
     """An instance with nothing to deliver prints no budget line rather than dividing by zero."""
+    assert generations_used((), SMALL.ga) is None
     assert budget_lines((), SMALL.ga) == []
+
+
+def test_the_generations_summary_counts_only_hubs_that_stopped_short() -> None:
+    """The early-stop count is what tells a reader the budget was not the binding constraint.
+
+    Pinned on hand-built outcomes rather than a real run so the boundary is exact: a hub landing
+    *on* the budget spent it and has not stopped early, and the one a generation below it has.
+    """
+    ga = dataclasses.replace(SMALL.ga, generations=10)
+    hubs = tuple(
+        HubOutcome(
+            hub_id=hub_id,
+            permutation=(0,),
+            objective_inr=Rupees(1.0),
+            generations_run=ran,
+            final_multiplier=1.0,
+        )
+        for hub_id, ran in enumerate((4, 9, 10))
+    )
+
+    summary = generations_used(hubs, ga)
+    assert summary is not None
+    assert (summary.median, summary.lowest, summary.highest) == (9, 4, 10)
+    assert (summary.stopped_early, summary.hubs) == (2, 3)
 
 
 def test_the_entry_point_runs_end_to_end(capsys: pytest.CaptureFixture[str]) -> None:

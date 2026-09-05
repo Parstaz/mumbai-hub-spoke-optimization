@@ -25,6 +25,7 @@ import argparse
 import logging
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from src.baseline.greedy import solve_baseline
 from src.cli.run_baseline import context_lines
@@ -129,6 +130,48 @@ def solve_pipeline(
     return Solution(stage1_routes=inbound, stage2_routes=outbound.routes), outbound.outcomes
 
 
+@dataclass(frozen=True, slots=True)
+class GenerationsUsed:
+    """How much of the generation budget a run's hubs actually spent.
+
+    Separated from its rendering because two entry points need the same figures in different
+    shapes: this one prints a two-line block for a single run, the step 7 ablation prints one line
+    per arm. Computing it twice would be two chances to disagree about what "used" means.
+    """
+
+    median: int
+    lowest: int
+    highest: int
+    stopped_early: int
+    hubs: int
+
+
+def generations_used(hubs: tuple[HubOutcome, ...], ga: GAConfig) -> GenerationsUsed | None:
+    """Summarise the generations each hub ran, or ``None`` when no hub ran at all.
+
+    ``None`` rather than a zeroed summary: an instance with nothing to deliver has no budget
+    story to tell, and a caller that rendered "median 0 of 600" would be describing a search that
+    never started.
+
+    Args:
+        hubs: Every hub's outcome, in any order.
+        ga: The configuration the run was launched with, for the budget and the stagnation limit.
+
+    Returns:
+        The median, range and early-stop count across hubs, or ``None`` if ``hubs`` is empty.
+    """
+    if not hubs:
+        return None
+    used = sorted(outcome.generations_run for outcome in hubs)
+    return GenerationsUsed(
+        median=used[len(used) // 2],
+        lowest=used[0],
+        highest=used[-1],
+        stopped_early=sum(1 for value in used if value < ga.generations),
+        hubs=len(used),
+    )
+
+
 def budget_lines(hubs: tuple[HubOutcome, ...], ga: GAConfig) -> list[str]:
     """Report the generations actually used against the budget configured.
 
@@ -138,18 +181,16 @@ def budget_lines(hubs: tuple[HubOutcome, ...], ga: GAConfig) -> list[str]:
     the budget — so a header claiming the budget was spent would be describing a run that did not
     happen.
     """
-    if not hubs:
+    summary = generations_used(hubs, ga)
+    if summary is None:
         return []
-    used = sorted(outcome.generations_run for outcome in hubs)
-    early = sum(1 for value in used if value < ga.generations)
-    median = used[len(used) // 2]
     lines = [
-        f"{'generations used':<{_LABEL_WIDTH}}median {median}, range {used[0]}-{used[-1]} "
-        f"of {ga.generations} budget",
+        f"{'generations used':<{_LABEL_WIDTH}}median {summary.median}, "
+        f"range {summary.lowest}-{summary.highest} of {ga.generations} budget",
     ]
-    if early:
+    if summary.stopped_early:
         lines.append(
-            f"{'':<{_LABEL_WIDTH}}{early} of {len(used)} hubs stopped early on "
+            f"{'':<{_LABEL_WIDTH}}{summary.stopped_early} of {summary.hubs} hubs stopped early on "
             f"stagnation_limit={ga.stagnation_limit}"
         )
     return lines
@@ -201,13 +242,18 @@ def comparison_lines(baseline: Metrics, optimized: Metrics, cost: CostConfig) ->
     for label, before, after, spec in rows:
         lines.append(
             f"{label:<{_LABEL_WIDTH}}{before:>{_COLUMN_WIDTH}{spec}}"
-            f"{after:>{_COLUMN_WIDTH}{spec}}{_delta(before, after):>{_COLUMN_WIDTH}}"
+            f"{after:>{_COLUMN_WIDTH}{spec}}{delta(before, after):>{_COLUMN_WIDTH}}"
         )
     return lines
 
 
-def _delta(before: float, after: float) -> str:
-    """Percentage change, signed so an improvement reads negative."""
+def delta(before: float, after: float) -> str:
+    """Percentage change, signed so an improvement reads negative.
+
+    Public because the step 7 ablation prints the same column against the same benchmark. A second
+    formatter would be free to disagree about the sign convention, which is the one thing about
+    this function a reader has to be able to trust without checking.
+    """
     if before == 0.0:
         return "—"
     return f"{(after - before) / before:+.1%}"
