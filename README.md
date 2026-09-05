@@ -226,75 +226,47 @@ Stated plainly, and not softened anywhere else in the repository:
    still comes from the cumulative band-blended model in `src/tour.py`. The proxy affects which
    tour is chosen, never what that tour is then said to cost.
 
-8. **The GA stops on its stagnation limit, and whether that means "converged" or "cut off"
-   depends on the hub.** On seed 42 every hub ended on `stagnation_limit = 75` rather than on
-   `generations = 600` — between 76 and 463 generations, median around 95. The run header reports
-   generations used against the budget, so the figure never needs correcting further down.
+8. **The GA stops early on some hubs against a distorted objective — localised, not solved.** On
+   seed 42 every hub ends on `stagnation_limit = 75` rather than on `generations = 600`, between 76
+   and 463 generations. On hub 9 that early stop costs real money, and four schedule variants show
+   it:
 
-   Three traces at full settings with `--trace-generations`, and the first reading of them was
-   wrong. **Hub 9** (236 stops, stopped at generation 95, penalty ended at ×32) looked converged —
-   13 incumbent improvements, all before generation 27, then 68 generations that found nothing.
-   Re-running the same hub on the same seed with the penalty **pinned at ×1.00** ran **313
-   generations and reached ₹28,516.5 against ₹29,172.6 — ₹656 better**, with 41 improvements and
-   the last at generation 238. Its convergence was an artefact of the penalty, not a property of
-   the problem. **Hub 0** (85 stops, stopped at 463, penalty ended at ×16) was genuinely still
-   improving: 44 improvements tapering from 19 in the first 57 generations to 5 across 342–399,
-   the last at 388, and it stopped with 137 generations of budget unspent.
+   | hub 9, seed 42 | generations | last improvement | configured ₹ | lateness ₹ |
+   |---|---|---|---|---|
+   | adaptive (shipping default) | 95 | 20 | 29,172.6 | 158.6 |
+   | penalty pinned at ×1.00 | 313 | 238 | 28,516.5 | 16.0 |
+   | `penalty_warmup_generations=50` | 486 | 411 | **28,477.9** | **4.5** |
+   | `penalty_warmup_generations=150` | 368 | 293 | 28,521.7 | 4.5 |
 
-   The mechanism is visible in the traces. Selection ranks plans at the adaptive rate while the
-   incumbent is tracked at the configured one, and at a high multiplier those are different enough
-   that elitism preserves the individual that is best *for the search* rather than the one that is
-   best *as reported* — so the best-known plan is evicted from the population. The trace shows it
-   as `population min` drifting above the incumbent: **73 of 95 generations on hub 9 at ×32, and 0
-   of 313 once the penalty is pinned, 0 of 463 on hub 0 at ×16.** With the best plan gone from the
-   population nothing can improve on it, and the stagnation counter expires on a search that had
-   not finished. An earlier draft of this section read that as a threshold between ×16 and ×32; that
-   was wrong and is withdrawn. It compared the multipliers each run *ended* at, when the schedule
-   caps the multiplier at 2^⌊g/10⌋ — it cannot exceed ×4 by generation 20 or reach ×32 before
-   generation 50, and hub 9's improvements all happened at or below ×4. What the evidence supports
-   is path dependence: a low multiplier helped when it was low *early* and did not when it arrived
-   late. The candidate fix is a warm-up floor on the schedule rather than a cap.
+   Any of the three recovers roughly ₹650–695. A warm-up beats pinning on both cost *and* lateness
+   while still ending at ×16, so the adaptive schedule is worth keeping — it simply must not engage
+   before the population has committed to a basin.
 
-   Two follow-ups, both recorded because they narrow what the finding means. First, the cheaper
-   plan is not a less feasible one: both hub 9 finals are priced at the configured ₹250/h by the
-   same code path, capacity is structural rather than charged, and the pinned plan is better on
-   *every* component including lateness — ₹16.0 against ₹158.6, 0.06 hours against 0.63, at the
-   same two violations, both at the 12-vehicle mass floor with no over-capacity route. The ×32
-   schedule produced the plan that was worse at the thing the penalty exists to control. Second,
-   the eviction turns out to be a *consequence* rather than the cause: carrying the incumbent back
-   into the population each generation cuts drift from 73 of 95 generations to 8 and changes the
-   answer by nothing at all — same ₹29,172.6, same 13 improvements, same stop. The incumbent
-   plateaus at generation 20 and drift only starts at 23, so the population wanders because the
-   incumbent has frozen, not the reverse. What the multiplier distorts is selection, and that
-   experiment was withdrawn rather than kept.
+   **The observation that makes this a finding rather than an anecdote is hub 0.** Traced generation
+   by generation, hub 0 follows a *bit-identical* multiplier path to hub 9 — ×1.00 through
+   generation 10, ×2.00 at 11, ×4 at 21, ×8 at 31, ×16 at 41 — and goes on improving to generation
+   388, while hub 9's improvements are finished by generation 20 with ×2.00 in force. Identical
+   schedule, opposite outcome. That rules the schedule out by construction as a sufficient cause:
+   what makes hub 9 fragile is hub 9 interacting with the schedule, not the schedule alone. It also
+   places the damage at the **first adaptation step** rather than at a high multiplier, which is
+   where an earlier version of this section wrongly placed it.
 
-   **The blast radius, recorded and not yet chased.** If this holds beyond hub 9, then every hub
-   that finished run 1 at a high multiplier may have stopped early against a distorted objective —
-   and 15 of 16 ended at ×8 or above. The per-hub figures in that run, and therefore the −14.4%
-   headline built from them, would then be **lower bounds of unknown tightness** rather than
-   converged results. Nothing has been re-run on that basis yet; it is written down so step 7 sizes
-   it deliberately instead of inheriting it.
+   Four explanations were tested and rejected, each by measurement: a penalty/stagnation correlation
+   (Pearson +0.21 — the wrong sign, and the single hub that relaxed to ×1.00 ran shortest of all);
+   the GA losing improvements by re-pricing only its search champion (0 of 95 flagged generations on
+   hub 9, 6 of 463 on hub 0, all six outside the window that decides the stop); population collapse
+   (no duplicate children on either hub); and re-injecting the incumbent as a fix (drift falls from
+   73 of 95 generations to 8 and the answer does not move by a rupee). Nor are the cheaper plans
+   less feasible — every arm sits at the 12-vehicle mass floor with no over-capacity route, and the
+   recovered plans carry *less* lateness rather than more.
 
-   That is one hub on one seed, and the multipliers stay as configured until step 7 measures this
-   across hubs and seeds. The transferable part is narrower: an early stop cannot be read as
-   "converged" without checking whether the best plan was still in the population when it happened.
-
-   The same traces killed both proposed explanations for stopping early. That the GA loses
-   improvements by re-pricing only its search champion: hub 9 flagged **0 of 95** generations, hub 0
-   **6 of 463**, and all six of those fell between generations 11 and 49 — none in the final 75,
-   which is the window that actually decides when a run stops. Real, rare, and beside the point *for
-   stopping* — though those six are genuine generations in which a cheaper plan sat in the
-   population uncaptured. That the population collapses: **no duplicate children on either hub at
-   all**, with 104–115 of 147 still novel in the closing ten generations.
-
-   Whether capturing those missed plans would have helped is checkable rather than arguable,
-   because the incumbent never feeds back into selection: the population evolves identically either
-   way, so re-pricing every individual would simply take the running minimum of the `population
-   min` the trace already records. On both hubs that comes to the final cost exactly — ₹29,172.6
-   and ₹14,986.9. Hub 0's six missed plans were at most ₹71.1 better than the incumbent of the day,
-   and the cheapest was ₹15,633 against its final ₹14,986.9. That is a measurement on two hubs, not
-   a guarantee: a missed plan changes the answer whenever it beats everything the run later
-   reaches.
+   **What was not investigated, stated so the stopping point can be judged.** Hub 9's fragility
+   could still lie in population size, tournament pressure, or-opt segment length, the local-search
+   share, the diversity guard's interaction with any of those, or hub geometry itself — 236 stops
+   against hub 0's 85. Each is a further 30–60 minute run and nothing in the evidence orders them,
+   which is exactly what makes that search unbounded. The mechanism is localised, the candidate fix
+   ships behind `penalty_warmup_generations` (default 0 — the schedule unchanged), and it stays off
+   until step 7 measures it across hubs and seeds. Recorded as a limitation rather than solved.
 
 9. **Guided local search under a wall-clock limit is not bit-reproducible.** It returns whatever
    it had reached when the clock ran out, so the same seed on a busier machine can yield a
