@@ -279,5 +279,55 @@ What is established: the direction is exactly reproducible at fixed seed across 
 runs, and it holds under **both** local-search settings — Stage 2 dearer by ₹2,588 with local search
 and ₹1,407 without. Two settings agreeing is more than one observation. What is not established is
 that the direction survives a different GA draw, and the honest reading is that step 6's hypothesis
-is disconfirmed in direction with a magnitude only about twice the noise floor. Reseeding the
-`balanced` arm is the missing measurement; it is roughly 50 minutes and is not run here.
+is disconfirmed in direction with a magnitude only about twice the noise floor.
+
+## Run 3 — reseeding the balanced arm
+
+Recorded before run 3 started. The missing measurement above, now being taken.
+
+### The comparison is at matched seeds
+
+`balanced` + local search at GA seed *s* against `nearest` + local search **at the same seed *s***,
+for *s* ∈ {42, 43, 44}. The `nearest` figures are run 2's probe:
+
+| GA seed | nearest +l.s. ₹/drop | balanced +l.s. ₹/drop |
+|---|---|---|
+| 42 | 264.63 | 269.25 (run 1) / 269.24 (run 2) |
+| 43 | 264.70 | *to be measured* |
+| 44 | 266.97 | *to be measured* |
+
+Comparing reseeded `balanced` arms against seed 42's `nearest` figure of ₹264.63 would be an error:
+it would pit a reseeded arm against an unreseeded one and manufacture a gap out of the `nearest`
+arm's own seed variation. Seed 44 is where this bites — `nearest` there is ₹266.97, so the headroom
+is ₹2.27, not ₹4.61.
+
+Cross-run comparability rests on the replication finding above: Stage 2 is bit-identical at a fixed
+GA seed across independent runs, and Stage 1's nondeterminism does not change the source-to-hub
+assignment, so run 3's `balanced` arms and run 2's `nearest` arms are comparable at matched seeds.
+
+### What each outcome would mean
+
+- **`balanced` stays above `nearest` at all three matched seeds** → the disconfirmation holds under
+  reseeding. Step 6's hypothesis is refuted in direction and the direction is robust to the GA draw;
+  limitation 6's amendment is rewritten as wrong.
+- **`balanced` crosses below `nearest` at any matched seed** → the direction is not robust to the GA
+  draw. The honest reading becomes **"disconfirmed at seed 42, not established in general"**, and
+  limitation 6 records step 6's hypothesis as *untested* rather than refuted — a weaker and less
+  satisfying claim, which is the point of writing this down first.
+
+### Prediction
+
+I expect `balanced` to stay above `nearest` at all three matched seeds.
+
+Reasoning: the gap is not primarily a search artefact. Balancing drives **205 km further** in total
+(9,095 km against 8,890 km), and distance is set by geography and the source-to-hub assignment, not
+by the GA draw — the GA reorders stops within a hub's workload, it does not choose which hub a
+parcel left from. At ₹9/km plus driver time that structural penalty should survive reseeding.
+
+The live risk is seed 44 specifically, where `nearest` was itself the outlier at ₹266.97 and leaves
+only ₹2.27 of headroom. If `balanced` happens not to have a matching outlier at 44, that is the
+seed where a crossing would show up.
+
+### Results
+
+*Appended when run 3 completes.*
