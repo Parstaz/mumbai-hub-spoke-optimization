@@ -202,12 +202,82 @@ the three magnitudes is qualified until the probe lands.
 What does *not* depend on the probe is the mechanism disconfirmation, because it rests on the Stage 2
 sign holding under **both** local-search settings — two observations agreeing, not one.
 
-## Replication — run 2
+## Replication and noise floor — run 2
 
-*In flight.* A second full run supplies the missing probe and, incidentally, something the probe
-alone cannot: because it re-solves Stage 1, the gap between run 1's and run 2's 2×2 measures **total
-run-to-run variation including Stage 1's guided-local-search noise**, which is a wider and more
-honest error bar than the GA-only probe. If run 2's arms land close to run 1's, that is stronger
-evidence than the probe by itself.
+A second full run, same config, completed 96 of 96 hub solves. Reported as replication; it does not
+replace run 1 as the result.
 
-Run 2 is reported here as replication. It does not replace run 1 as the result.
+### The noise probe: range ₹2.34 over three GA seeds
+
+`nearest` with local search, same inbound plan, GA seed varied:
+
+| GA seed | cost per drop ₹ |
+|---|---|
+| 42 (reported) | 264.63 |
+| 43 | 264.70 |
+| 44 | 266.97 |
+| **range** | **2.34** |
+
+All three effects clear it, with materially different margins:
+
+| effect | ₹/drop | × the range |
+|---|---|---|
+| local search on `nearest` | 7.73 | **3.30×** |
+| local search on `balanced` | 6.26 | **2.68×** |
+| balanced penalty | 4.61 | **1.97×** |
+
+Two caveats on that floor, both of which make it weaker than it looks. It is a **range over n=3**,
+not a standard deviation, and the range of three samples systematically understates the spread of
+the underlying distribution — so ₹2.34 is itself a lower bound on GA noise. And it is driven by a
+single outlier: seeds 42 and 43 agree to ₹0.07 while seed 44 sits ₹2.34 away.
+
+So the two local-search effects are comfortably clear. **The balanced penalty is not comfortable at
+1.97×**, and see the limitation below.
+
+### The replication: essentially bit-identical, which was not what I predicted
+
+| cost per drop ₹ | run 1 | run 2 | Δ |
+|---|---|---|---|
+| nearest +l.s. | 264.63 | 264.63 | 0.00 |
+| nearest −l.s. | 272.36 | 272.36 | 0.00 |
+| balanced +l.s. | 269.25 | 269.24 | −0.01 |
+| balanced −l.s. | 275.50 | 275.50 | 0.00 |
+
+Stage 2's cost is **bit-identical in both runs for all four arms**. Stage 1 moved by ₹1 on
+`nearest` and ₹5 on `balanced` — 0.0015% and 0.0074%. Generations used, medians and ranges alike,
+match exactly across the two runs for every arm.
+
+**Correction.** I claimed before the run that re-solving Stage 1 would make the replication *"a
+wider and more honest error bar than the GA-only probe"*. It is the opposite: run-to-run variation
+on cost per drop is **₹0.01, some 234× narrower than the GA-seed range of ₹2.34**. The reasoning was
+wrong, and the mechanism is instructive — Stage 1's guided local search does perturb tour *ordering*
+within a hub, which is where the ₹1–5 comes from, but on this instance it does not change the
+**source-to-hub assignment**. The customer-to-hub mapping is therefore identical, and an identical
+mapping plus an identical per-hub GA seed produces an identical Stage 2. Stage 1 nondeterminism is
+real but does not propagate across the stage boundary here.
+
+### What this means for step 9
+
+- **With respect to Stage 1 noise, one run per seed is a sound point estimate.** The thing that
+  worried limitation 9 does not move the headline on this instance.
+- **With respect to the GA seed, it is not.** `Stage2Task.seed` is `config.run.seed`, so a
+  multi-seed evaluation varies the instance and the GA draw *together* and cannot separate them.
+  Every per-seed figure carries something like the ₹2.34 seen here, against effects of ₹4.6–7.7 —
+  2–3× the noise. Step 9 should report a per-seed spread rather than a single mean, and needs enough
+  seeds that the GA component averages down rather than being mistaken for instance-to-instance
+  variation.
+
+### Limitation: the mechanism disconfirmation is untested under reseeding
+
+The probe reseeded only the `nearest` + local-search arm. There is no reseeded `balanced` arm, so
+the Stage 2 sign that disconfirms step 6's hypothesis has **not** been tested under GA reseeding.
+The margin is the reason to say so out loud: at seed 44, `nearest` +l.s. came in at ₹266.97, only
+₹2.27 below `balanced`'s ₹269.24. A reseeded `balanced` arm could plausibly land close to, or
+across, a reseeded `nearest` arm.
+
+What is established: the direction is exactly reproducible at fixed seed across two independent
+runs, and it holds under **both** local-search settings — Stage 2 dearer by ₹2,588 with local search
+and ₹1,407 without. Two settings agreeing is more than one observation. What is not established is
+that the direction survives a different GA draw, and the honest reading is that step 6's hypothesis
+is disconfirmed in direction with a magnitude only about twice the noise floor. Reseeding the
+`balanced` arm is the missing measurement; it is roughly 50 minutes and is not run here.
