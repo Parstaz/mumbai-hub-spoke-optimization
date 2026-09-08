@@ -48,12 +48,17 @@ _LABEL_WIDTH = 22
 _COLUMN_WIDTH = 14
 """Five columns of this width plus the label stay inside a 100-column terminal."""
 
-_PROBE_ARM = "nearest"
-"""Which arm the noise probe repeats.
+_DEFAULT_PROBE_ARM = "nearest"
+"""Which arm the noise probe repeats unless ``--probe-arm`` says otherwise.
 
 ``nearest`` with local search is the shipping configuration and the arm holding the 236-stop hub,
 so it has the largest search space and the most room to vary. Sizing the noise floor on the
 noisiest arm bounds it for the other three rather than flattering them.
+
+It is selectable because bounding is not always what is wanted. Establishing that a *difference*
+between two arms survives reseeding needs both of them reseeded and compared at matched seeds —
+holding one arm at a single seed while varying the other compares a reseeded figure against an
+unreseeded one, which invents a gap out of the unreseeded arm's own seed variation.
 """
 
 
@@ -85,6 +90,12 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         type=int,
         default=2,
         help="repeats of one arm at other GA seeds, to size the noise floor; 0 skips it",
+    )
+    parser.add_argument(
+        "--probe-arm",
+        choices=tuple(STRATEGIES),
+        default=_DEFAULT_PROBE_ARM,
+        help="which assignment's local-search arm the noise probe reseeds",
     )
     parser.add_argument(
         "--deterministic",
@@ -346,12 +357,18 @@ def probe_lines(reference: Arm, samples: Sequence[Arm], arms: Sequence[Arm]) -> 
         for arm in samples
     )
     lines.append(f"  {'spread':<26}₹{spread:,.2f}")
-    lines.extend(_clearance_lines(arms, spread))
+    lines.extend(_clearance_lines(arms, spread, reference.strategy))
     return lines
 
 
-def _clearance_lines(arms: Sequence[Arm], spread: float) -> list[str]:
-    """Say, per strategy, whether local search moved the answer by more than seed choice does."""
+def _clearance_lines(arms: Sequence[Arm], spread: float, source: str) -> list[str]:
+    """Say, per strategy, whether local search moved the answer by more than seed choice does.
+
+    ``source`` names the arm the floor was measured on, and is in the line rather than implied by
+    the header above it: the probe reseeds one arm, so a clearance verdict on the *other* strategy
+    is being judged against a floor borrowed from this one. That is worth reporting and worth
+    labelling, and an unlabelled line reads as though each effect had its own floor.
+    """
     by_arm = {(arm.strategy, arm.local_search): arm for arm in arms}
     lines: list[str] = []
     for strategy in STRATEGIES:
@@ -362,7 +379,7 @@ def _clearance_lines(arms: Sequence[Arm], spread: float) -> list[str]:
             with_ls.priced.metrics.cost_per_drop_inr - without_ls.priced.metrics.cost_per_drop_inr
         )
         verb = "clears" if effect > spread else "does not clear"
-        lines.append(f"  local search on {strategy}: ₹{effect:,.2f}, {verb} the noise floor.")
+        lines.append(f"  local search on {strategy}: ₹{effect:,.2f}, {verb} the {source} floor.")
     return lines
 
 
@@ -415,8 +432,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     _print_report(problem, benchmark, arms, config)
 
     if args.noise_probe > 0:
-        probe_leg = next(leg for leg in legs if leg.strategy == _PROBE_ARM)
-        reference = next(arm for arm in arms if arm.strategy == _PROBE_ARM and arm.local_search)
+        probe_leg = next(leg for leg in legs if leg.strategy == args.probe_arm)
+        reference = next(arm for arm in arms if arm.strategy == args.probe_arm and arm.local_search)
         samples = probe_arms(probe_leg, problem, config, args.noise_probe)
         for line in probe_lines(reference, samples, arms):
             print(f"  {line}")

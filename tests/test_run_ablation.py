@@ -385,8 +385,28 @@ def test_the_probe_says_whether_an_effect_clears_the_noise_floor() -> None:
     lines = probe_lines(arms[0], samples, arms)
 
     assert "spread" in lines[-3]
-    assert "local search on nearest: ₹0.50, does not clear the noise floor." in lines[-2]
-    assert "local search on balanced: ₹10.00, clears the noise floor." in lines[-1]
+    assert "local search on nearest: ₹0.50, does not clear the nearest floor." in lines[-2]
+    assert "local search on balanced: ₹10.00, clears the nearest floor." in lines[-1]
+
+
+def test_the_clearance_line_names_the_arm_the_floor_came_from() -> None:
+    """The probe reseeds one arm, so the other strategy borrows its floor.
+
+    An unlabelled verdict reads as though each effect had been measured against its own spread. It
+    has not, and which arm supplied the floor is exactly what a reader needs to discount by.
+    """
+    arms = [
+        fake_arm("nearest", True, 100.0),
+        fake_arm("nearest", False, 110.0),
+        fake_arm("balanced", True, 100.0),
+        fake_arm("balanced", False, 110.0),
+    ]
+    samples = [fake_arm("balanced", True, 101.0, ga_seed=43)]
+
+    lines = probe_lines(arms[2], samples, arms)
+
+    assert lines[0].startswith("Noise probe: balanced with l.s.")
+    assert all("the balanced floor." in line for line in lines[-2:])
 
 
 def test_the_entry_point_runs_end_to_end(capsys: pytest.CaptureFixture[str]) -> None:
@@ -419,6 +439,38 @@ def test_the_entry_point_runs_end_to_end(capsys: pytest.CaptureFixture[str]) -> 
     assert "with l.s." in printed and "no l.s." in printed
     assert "generations used" in printed
     assert "Noise probe" in printed
+
+
+def test_the_entry_point_can_probe_either_arm(capsys: pytest.CaptureFixture[str]) -> None:
+    """Establishing that a *difference* survives reseeding needs the other arm reseeded too.
+
+    With the probe arm fixed to ``nearest``, a reseeded ``nearest`` figure could only ever be
+    compared against an unreseeded ``balanced`` one, which invents a gap out of one arm's own seed
+    variation. The flag exists so the comparison can be made at matched seeds.
+    """
+    exit_code = main(
+        [
+            "--seed",
+            "11",
+            "--no-osrm",
+            "--generations",
+            "2",
+            "--population",
+            "8",
+            "--workers",
+            "1",
+            "--noise-probe",
+            "1",
+            "--probe-arm",
+            "balanced",
+            "--deterministic",
+        ]
+    )
+
+    assert exit_code == 0
+    printed = capsys.readouterr().out
+    assert "Noise probe: balanced with l.s." in printed
+    assert "the balanced floor." in printed
 
 
 def test_the_entry_point_can_skip_the_probe(capsys: pytest.CaptureFixture[str]) -> None:
