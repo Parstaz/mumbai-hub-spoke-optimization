@@ -1,9 +1,15 @@
 # Step 7 — the local-search × assignment ablation
 
-Status: **predictions recorded, full-budget run in flight.** This file is written in two passes.
-Everything above the results section was committed before the shipping-config run produced a single
-arm, so the predictions in it are predictions. The results section is appended afterwards and scores
-them, whichever way they fall.
+Status: **run 1 reported and scored; replication in flight.** This file is written in two passes.
+Everything above the results section was committed at `303ee62`, before the shipping-config run
+produced a single arm, so the predictions in it are predictions. The results section was appended
+afterwards and scores them.
+
+**Which run is the result.** Run 1 is the result, because it is the run the predictions were
+registered against. A second run is under way to replicate it and to supply the noise probe that
+run 1 lost; it is reported as replication and does not replace run 1. Scoring predictions against
+one run and then publishing a different one would make the predictions unfalsifiable after the
+fact.
 
 ## What is being measured
 
@@ -92,6 +98,116 @@ and it stays the total whichever way the mechanism reads.
 Whether `penalty_warmup_generations` generalises. It is off in all four arms; step 9's multi-seed
 run produces that evidence as a by-product.
 
-## Results
+## Results — run 1, seed 42, shipping config
 
-*Appended when the shipping-config run completes.*
+Population 150, budget 600 generations, `penalty_warmup_generations=0`, OSRM distances, Stage 1 on
+guided local search and solved once per assignment.
+
+| | greedy | nearest +l.s. | nearest −l.s. | balanced +l.s. | balanced −l.s. |
+|---|---|---|---|---|---|
+| **cost per drop ₹** | 309.01 | **264.63** | 272.36 | 269.25 | 275.50 |
+| vs greedy | — | **−14.4%** | −11.9% | −12.9% | −10.8% |
+| total cost ₹ | 247,204 | 211,704 | 217,892 | 215,396 | 220,403 |
+| variable ₹9/km | 89,895 | 80,008 | 82,273 | 81,858 | 84,663 |
+| driver ₹95/h | 37,687 | 35,286 | 35,777 | 36,367 | 36,984 |
+| fixed ₹1000/veh | 96,000 | 96,000 | 97,000 | 97,000 | 97,000 |
+| late ₹250/h | 23,622 | 410 | 2,842 | 171 | 1,756 |
+| stage 1 inbound ₹ | 69,307 | 66,261 | 66,261 | 67,365 | 67,365 |
+| stage 2 final mile ₹ | 177,897 | 145,443 | 151,631 | 148,031 | 153,038 |
+| distance km | 9,988.4 | 8,889.8 | 9,141.4 | 9,095.4 | 9,407.1 |
+| duration h | 396.7 | 371.4 | 376.6 | 382.8 | 389.3 |
+| vehicle-days | 96 | 96 | 97 | 97 | 97 |
+| window violations | 68 | 9 | 16 | 7 | 7 |
+| lateness h | 94.5 | 1.6 | 11.4 | 0.7 | 7.0 |
+
+Generations actually run, against the 600 budget:
+
+| arm | median | range | stopped early | wall clock |
+|---|---|---|---|---|
+| nearest +l.s. | 97 | 76–463 | 16 of 16 | 1,422 s |
+| nearest −l.s. | 185 | 79–600 | **15** of 16 | 2,216 s |
+| balanced +l.s. | 210 | 77–571 | 16 of 16 | 1,812 s |
+| balanced −l.s. | 417 | 78–600 | **15** of 16 | 1,112 s |
+
+### Both predictions held
+
+| | pilot | run 1 | called |
+|---|---|---|---|
+| local search, nearest | −5.2% | **−2.84%** | shrinks, under 3%, still negative ✓ |
+| local search, balanced | −4.2% | **−2.27%** | ✓ |
+| balanced vs nearest, total | +3.7% | **+1.75%** | narrows, stays positive ✓ |
+
+### Local search pays, but −2.84% is an upper bound, not an estimate
+
+The measured benefit is ₹7.73/drop on `nearest` and ₹6.25 on `balanced`, same sign under both
+assignments. It is also cheaper in wall clock on `nearest` — 1,422 s against 2,216 s — because the
+memetic arm converges in far fewer generations (median 97 against 185).
+
+**The arms were not truncated identically, and the asymmetry flatters local search.** Hub 9
+exhausted the 600-generation ceiling in *both* no-local-search arms and in *neither* local-search
+arm. The comparison arm was therefore stopped rather than converged on its largest hub, so the
+difference measured against it bounds local search's benefit from above. The arithmetic:
+
+- hub 9, nearest, local search on: ₹28,640 at 195 generations (converged)
+- hub 9, nearest, local search off: ₹30,235 at 600 generations (**ceiling**)
+- that hub contributes ₹1,595 of the ₹6,188 total gain on `nearest` — **26% of it**
+
+So `−2.84%` should be read as "no worse than 2.84% better", and a fair share of it sits on the one
+hub where the control ran out of budget. Run 1's own output originally asserted the opposite —
+that truncation applied to all arms identically — which was false about the run printing it. That
+is fixed in `truncation_lines` (`486920d`), which now counts exhausted hubs per arm and only claims
+symmetry when the counts agree.
+
+### Step 6's hypothesis is disconfirmed — the harsher of the two pre-registered readings
+
+| ₹, both arms with local search | nearest | balanced | |
+|---|---|---|---|
+| stage 1 inbound | 66,261 | 67,365 | +1.67% |
+| **stage 2 final mile** | **145,443** | **148,031** | **+1.78%** |
+| total | 211,704 | 215,396 | +1.74% |
+
+Balancing made the final mile **dearer**, not insufficiently cheaper — and the sign holds without
+local search too (151,631 → 153,038, +0.93%). That is the second bullet of the pre-registered
+criterion, so step 6's claim that *"a flatter distribution is a smaller search space per stop, so
+equal GA effort buys more optimisation"* is **wrong on this instance**, and limitation 6's amendment
+gets rewritten rather than confirmed.
+
+Two observations make it harder to explain away rather than easier:
+
+- **Balanced was not starved of search.** It ran a median 210 generations against nearest's 97.
+  Smaller hubs are cheaper per generation, so it got *more* iterations on a flatter distribution and
+  still produced a worse final mile.
+- **The intervention landed where the hypothesis said it should.** Hub 9's 236 stops — the hub whose
+  early stagnation is limitation 8 — fell to 73 under balancing. The specific fragility the argument
+  rested on was removed, and the leg still got dearer.
+
+What balancing *does* buy is time-window compliance: 7 violations and 0.7 h lateness against
+nearest's 9 and 1.6 h. It pays for that in distance (9,095 km against 8,890 km), and at ₹9/km plus
+driver time the distance dominates. That is step 4's mechanism showing up on the outbound leg as
+well as the inbound one — relocating a stop to a less-loaded hub buys a longer radial leg — and it
+is why the flatter search space never gets a chance to pay.
+
+The coincidence that the total (+1.74%) and the inbound leg (+1.67%) both round to +1.7% is
+arithmetic, not Stage 2 neutrality. Both legs moved the same way by nearly the same proportion. The
+verdict line was amended to name the final-mile direction explicitly, because two percentages that
+agree by accident otherwise read as the outbound leg contributing nothing.
+
+### What run 1 could not establish
+
+**No error bar.** The noise probe was killed mid-sample, so run 1 has no measure of seed-to-seed
+variation. This matters most for the balanced penalty: ₹4.62/drop, against a pilot one-sample
+spread of ₹3.28. The local-search effects (₹7.73, ₹6.25) are the same order of magnitude. None of
+the three magnitudes is qualified until the probe lands.
+
+What does *not* depend on the probe is the mechanism disconfirmation, because it rests on the Stage 2
+sign holding under **both** local-search settings — two observations agreeing, not one.
+
+## Replication — run 2
+
+*In flight.* A second full run supplies the missing probe and, incidentally, something the probe
+alone cannot: because it re-solves Stage 1, the gap between run 1's and run 2's 2×2 measures **total
+run-to-run variation including Stage 1's guided-local-search noise**, which is a wider and more
+honest error bar than the GA-only probe. If run 2's arms land close to run 1's, that is stronger
+evidence than the probe by itself.
+
+Run 2 is reported here as replication. It does not replace run 1 as the result.
