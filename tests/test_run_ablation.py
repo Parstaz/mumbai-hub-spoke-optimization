@@ -263,6 +263,42 @@ def test_the_caveat_is_silent_when_every_arm_spent_its_budget() -> None:
     assert truncation_lines([], SMALL.ga) == []
 
 
+def test_the_caveat_refuses_to_claim_symmetry_it_has_not_checked() -> None:
+    """The real seed-42 shape: the budget ceiling was hit in one arm and not the other.
+
+    Hub 9 exhausted the 600 generations in both no-local-search arms and in neither local-search
+    arm, so the arms were *not* truncated identically and the direction is not neutral — the
+    comparison arm was cut off rather than converged. A caveat asserting symmetry here would be
+    false about the run printing it, which is worse than no caveat.
+    """
+    arms = [
+        fake_arm("nearest", True, 100.0, generations_run=SMALL.ga.generations - 1),
+        fake_arm("nearest", False, 110.0, generations_run=SMALL.ga.generations),
+    ]
+
+    lines = truncation_lines(arms, SMALL.ga)
+
+    assert any("NOT truncated identically" in line for line in lines)
+    assert any("upper bound on the other arm's benefit" in line for line in lines)
+    assert any(
+        "nearest with l.s. 0 of 1" in line and "nearest no l.s. 1 of 1" in line for line in lines
+    )
+    assert not any("applies to all arms identically" in line for line in lines)
+
+
+def test_the_symmetric_claim_survives_when_the_counts_do_agree() -> None:
+    """Equal truncation is the case the original caveat was written for, and it still holds."""
+    arms = [
+        fake_arm("nearest", True, 100.0, generations_run=SMALL.ga.generations - 1),
+        fake_arm("nearest", False, 110.0, generations_run=SMALL.ga.generations - 2),
+    ]
+
+    lines = truncation_lines(arms, SMALL.ga)
+
+    assert any("applies to all arms identically" in line for line in lines)
+    assert not any("NOT truncated identically" in line for line in lines)
+
+
 def test_the_verdict_reports_local_search_losing_as_a_loss() -> None:
     """The failure mode this ablation must be able to report.
 
@@ -297,19 +333,43 @@ def test_the_verdict_says_so_when_the_two_assignments_disagree() -> None:
     assert "not separable from the assignment" in lines[2]
 
 
-def test_the_assignment_verdict_contrasts_the_total_with_the_inbound_leg() -> None:
-    """Step 4's verdict was inbound-only; the point of step 7 is to print both side by side."""
+def test_the_assignment_verdict_contrasts_the_total_with_both_legs() -> None:
+    """Step 4's verdict was inbound-only; the point of step 7 is to print every leg beside it."""
     arms = [
-        fake_arm("nearest", True, 100.0, stage1_inr=1000.0),
-        fake_arm("nearest", False, 105.0, stage1_inr=1000.0),
-        fake_arm("balanced", True, 98.0, stage1_inr=1017.0),
-        fake_arm("balanced", False, 103.0, stage1_inr=1017.0),
+        fake_arm("nearest", True, 100.0, stage1_inr=1000.0, stage2_inr=2000.0),
+        fake_arm("nearest", False, 105.0, stage1_inr=1000.0, stage2_inr=2100.0),
+        fake_arm("balanced", True, 98.0, stage1_inr=1017.0, stage2_inr=1900.0),
+        fake_arm("balanced", False, 103.0, stage1_inr=1017.0, stage2_inr=2050.0),
     ]
 
-    verdict = verdict_lines(arms)[-1]
+    lines = verdict_lines(arms)
 
-    assert "-2.0% on total cost per drop" in verdict
-    assert "+1.7% on the inbound leg alone" in verdict
+    assert "-2.0% on total cost per drop" in lines[-3]
+    assert "inbound +1.7%" in lines[-2]
+    assert "final mile -5.0%" in lines[-2]
+    assert "made the final mile cheaper" in lines[-2]
+
+
+def test_a_coincidental_equality_cannot_read_as_stage_2_neutrality() -> None:
+    """Seed 42's shape: total and inbound both land on +1.7% while the final mile is dearer.
+
+    A reader seeing only those two percentages concludes Stage 2 contributed nothing. It
+    contributed +1.8% in the same direction. Step 6's hypothesis was specifically about the final
+    mile, so this is the row that decides it and it must be named rather than inferred.
+    """
+    arms = [
+        fake_arm("nearest", True, 264.63, stage1_inr=66261.0, stage2_inr=145443.0),
+        fake_arm("nearest", False, 272.36, stage1_inr=66261.0, stage2_inr=151631.0),
+        fake_arm("balanced", True, 269.25, stage1_inr=67365.0, stage2_inr=148031.0),
+        fake_arm("balanced", False, 275.50, stage1_inr=67365.0, stage2_inr=153038.0),
+    ]
+
+    lines = verdict_lines(arms)
+
+    assert "+1.7% on total cost per drop" in lines[-3]
+    assert "inbound +1.7%" in lines[-2] and "final mile +1.8%" in lines[-2]
+    assert "made the final mile dearer" in lines[-2]
+    assert "not the inbound figure passed through" in lines[-1]
 
 
 def test_the_probe_says_whether_an_effect_clears_the_noise_floor() -> None:

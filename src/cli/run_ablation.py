@@ -13,8 +13,16 @@ say so; the verdict is computed from the total and from nothing else.
 far short of the 600-generation budget, and a figure quoted against the budget is not a figure
 about that configuration. The truncation caveat is printed by the run itself rather than left to
 the write-up, because the table is what gets copied out of a terminal and the caveat has to travel
-with it: truncation hits all four arms alike, so it biases the absolute level — already reported as
-a lower bound — and not the differences this ablation exists to report.
+with it.
+
+**That caveat does not assume it is symmetric.** Stagnation truncation is — every arm stops by the
+same mechanism, so it biases the absolute level and not the differences. Budget truncation is not
+guaranteed to be, and on seed 42 it was not: hub 9 exhausted the 600-generation ceiling in both
+no-local-search arms and in neither local-search arm. An arm with hubs cut off at the ceiling was
+stopped rather than converged, so a difference measured against it is an *upper bound* on the other
+arm's benefit. :func:`truncation_lines` therefore counts the exhausted hubs per arm and only claims
+symmetry when the counts agree — an earlier version asserted it unconditionally and was false about
+the very run that printed it.
 """
 
 from __future__ import annotations
@@ -202,18 +210,59 @@ def generation_lines(arms: Sequence[Arm], ga: GAConfig) -> list[str]:
 def truncation_lines(arms: Sequence[Arm], ga: GAConfig) -> list[str]:
     """State what the early stopping does and does not invalidate, in the run's own output.
 
-    It is a real limitation of the absolute level and *not* a limitation of the differences: every
-    arm is truncated by the same mechanism. Silent when no arm stopped early, so a run that did
-    spend its budget does not carry a caveat that no longer applies to it.
+    Stagnation truncation biases the absolute level and not the differences, because every arm
+    stops by the same mechanism. **Budget truncation need not be symmetric**, and on seed 42 it was
+    not: hub 9 exhausted the 600-generation ceiling in both no-local-search arms and in neither
+    local-search arm. An arm with hubs cut off at the ceiling was stopped rather than converged, so
+    a difference measured against it overstates the other arm's benefit. Asserting symmetry without
+    checking for it is how a caveat becomes false, so the symmetric claim is made only when the
+    per-arm counts agree.
+
+    Silent when no arm stopped early, so a run that did spend its budget does not carry a caveat
+    that no longer applies to it.
     """
-    summaries = [generations_used(arm.outcomes, ga) for arm in arms]
-    if not any(summary is not None and summary.stopped_early for summary in summaries):
+    counts: list[tuple[str, int, int]] = []
+    stagnated = False
+    for arm in arms:
+        summary = generations_used(arm.outcomes, ga)
+        if summary is None:
+            continue
+        stagnated = stagnated or bool(summary.stopped_early)
+        counts.append(
+            (
+                f"{arm.strategy} {arm.search_label}",
+                summary.hubs - summary.stopped_early,
+                summary.hubs,
+            )
+        )
+    if not stagnated:
         return []
-    return [
+    lines = [
         f"Arms stop on stagnation_limit={ga.stagnation_limit} rather than exhausting the budget,",
         "so the absolute cost per drop above is a lower bound on what this configuration reaches.",
-        "Truncation applies to all arms identically: it biases the level, not the differences this",
-        "ablation reports.",
+    ]
+    if len({exhausted for _, exhausted, _ in counts}) == 1:
+        return [
+            *lines,
+            "Truncation applies to all arms identically: it biases the level, not the differences",
+            "this ablation reports.",
+        ]
+    return [*lines, *_asymmetry_lines(counts, ga)]
+
+
+def _asymmetry_lines(counts: Sequence[tuple[str, int, int]], ga: GAConfig) -> list[str]:
+    """Report unequal budget truncation, and which way it biases the comparison.
+
+    Named per arm rather than summarised, because *which* arm was cut off is what decides the
+    direction: a difference measured against a truncated arm is an upper bound on the untruncated
+    arm's benefit, not an estimate of it.
+    """
+    tally = ", ".join(f"{label} {exhausted} of {hubs}" for label, exhausted, hubs in counts)
+    return [
+        f"Arms were NOT truncated identically. Hubs that exhausted the {ga.generations}-generation",
+        f"budget rather than converging: {tally}.",
+        "An arm with more exhausted hubs was cut off rather than converged, so a difference",
+        "measured against it is an upper bound on the other arm's benefit, not an estimate of it.",
     ]
 
 
@@ -248,11 +297,17 @@ def verdict_lines(arms: Sequence[Arm]) -> list[str]:
 
 
 def _assignment_verdict(by_arm: dict[tuple[str, bool], Arm]) -> list[str]:
-    """Compare the two assignments end to end against the inbound leg alone.
+    """Compare the two assignments end to end, then name what each leg did.
 
-    Both figures come from this run rather than from step 4's recorded 1.7%, so the contrast is
-    between two numbers measured under the same conditions. This is the comparison step 4 could
-    not make, and reading only the inbound row is what made its verdict incomplete.
+    Every figure comes from this run rather than from step 4's recorded 1.7%, so the contrast is
+    between numbers measured under the same conditions. This is the comparison step 4 could not
+    make, and reading only the inbound row is what made its verdict incomplete.
+
+    The final-mile direction is spelled out because the total and the inbound figure can land on
+    the same percentage by coincidence — they did on seed 42, at +1.7% each — and a reader who sees
+    only those two concludes Stage 2 was neutral. It was not: it moved the same way by 1.78%. Step
+    6's hypothesis was specifically that a flatter distribution buys a *better final mile*, so this
+    is the row that confirms or refutes it, and it has to be printed rather than inferred.
     """
     nearest, balanced = by_arm.get(("nearest", True)), by_arm.get(("balanced", True))
     if nearest is None or balanced is None:
@@ -261,9 +316,13 @@ def _assignment_verdict(by_arm: dict[tuple[str, bool], Arm]) -> list[str]:
         nearest.priced.metrics.cost_per_drop_inr, balanced.priced.metrics.cost_per_drop_inr
     )
     inbound = delta(nearest.priced.stage1_inr, balanced.priced.stage1_inr)
+    outbound = delta(nearest.priced.stage2_inr, balanced.priced.stage2_inr)
+    direction = "cheaper" if balanced.priced.stage2_inr < nearest.priced.stage2_inr else "dearer"
     return [
-        f"Balanced against nearest, both with local search: {total} on total cost per drop, "
-        f"against {inbound} on the inbound leg alone.",
+        f"Balanced against nearest, both with local search: {total} on total cost per drop.",
+        f"  By leg: inbound {inbound}, final mile {outbound}. Balancing made the final mile "
+        f"{direction},",
+        "  so the total is not the inbound figure passed through, whatever the percentages read.",
     ]
 
 
