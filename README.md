@@ -1,140 +1,211 @@
 # mumbai-hub-spoke-optimization
 
 Two-stage hub-and-spoke pickup and delivery optimization over a synthetic Mumbai / Navi Mumbai
-network. Stage 1 consolidates ~300 sources into 16 hubs (OR-Tools CVRP + min-cost flow); Stage 2
-runs a hand-written genetic algorithm to deliver from those hubs to ~800 customers under capacity
-and time windows. The headline KPI is **cost per drop (₹/delivery)**.
+network. **Stage 1** consolidates ~300 pickup sources into 16 hubs, one OR-Tools CVRP per hub.
+**Stage 2** delivers from those hubs to ~800 customers under vehicle capacity and delivery time
+windows, using a genetic algorithm written from scratch. Both stages are priced in rupees against a
+greedy nearest-neighbour benchmark, and the headline KPI is **cost per drop (₹/delivery)**.
 
-> **Build status.** Both stages are built (step 6 of 9). `make run` solves one seed end to end and
-> prints it against the greedy benchmark; on seed 42 under OSRM that is **₹309.01 → ₹264.63 per
-> drop, −14.4%**, at an unchanged 96 vehicle-days. **Treat that as a lower bound, not a result.**
-> 15 of the 16 hubs finished that run at an adaptive penalty of ×8 or above, and hub 9 has been
-> shown to leave ₹656 on the table under exactly that condition (limitation 8). The figure is
-> re-measured at step 9 once the penalty schedule is settled. The ablation (step 7), the OR-Tools reference
-> (step 8) and the multi-seed evaluation with its figures and full write-up (step 9) are still to
-> come, so treat that as one seed rather than a result — a single run has no error bar, and the
-> figure it is compared against comes from a solver whose inbound leg is not bit-reproducible.
-> This README currently documents the cost layer, the traffic model and the baseline in depth;
-> the two solvers are documented in their own modules until step 9.
+Python 3.11+, `mypy --strict`, 99% line coverage on the solver, cost and baseline modules
+(`make cov`), property-based tests on the GA operators and the split procedure. `make test` is the
+gate: `ruff` + `mypy --strict` + `pytest`, and no test touches the network.
 
----
-
-## Running it without any setup
-
-The cost layer has a great-circle fallback with no external dependencies, so the pipeline runs on
-a clean checkout with no Docker and no OSM data:
-
-```bash
-make data                                   # seeded synthetic instance + scatter plot
-.venv/bin/python -m src.cli.compare_providers --no-osrm
-.venv/bin/python -m src.cli.run_baseline --no-osrm    # greedy benchmark + metrics table
-```
-
-Distances are then haversine × `RunConfig.circuity_factor` (1.30, measured — see below), with
-durations at `haversine_speed_kmph` (24 km/h). Those are estimates, not road-network figures, and
-every run that uses them says so at `WARNING`.
+> **Status: steps 1–7 of 9 are built.** Both stages solve end to end on one seed
+> (`make run`), and step 7's ablation is reported below. **Step 8** (an OR-Tools reference solve for
+> Stage 2, to measure the hand-written GA's optimality gap) and **step 9** (multi-seed evaluation
+> with per-seed spreads) are outstanding. So every figure here is **one instance, seed 42** — the
+> error bars are coming rather than missing, and the one noise floor that has been measured is
+> quoted where it matters.
 
 ---
 
-## One-time OSRM setup
+## Results as they stand
 
-Real road distances need a self-hosted [OSRM](https://project-osrm.org/) instance. The whole
-sequence is `make osrm`, which takes 15–30 minutes and around 4 GB of RAM. What it does, and how
-to do it by hand:
+Seed 42, OSRM road distances, population 150 against a 600-generation budget. The optimized column
+is nearest-hub assignment with memetic local search on — the shipping default.
 
-### 1. Download the extract
+| | greedy benchmark | optimized | |
+|---|---|---|---|
+| **cost per drop ₹** | 309.01 | **264.63** | **−14.4%** |
+| total cost ₹ | 247,204 | 211,704 | −35,500 |
+| — variable, ₹9/km | 89,895 | 80,008 | −9,887 |
+| — driver, ₹95/h | 37,687 | 35,286 | −2,401 |
+| — fixed, ₹1,000/vehicle | 96,000 | 96,000 | 0 |
+| — lateness, ₹250/h | 23,622 | 410 | −23,212 |
+| stage 1 inbound ₹ | 69,307 | 66,261 | −4.4% |
+| stage 2 final mile ₹ | 177,897 | 145,443 | −18.2% |
+| distance km | 9,988.4 | 8,889.8 | −11.0% |
+| vehicle-days | 96 | 96 | 0 |
+| window violations | 68 | 9 | −59 |
+| lateness h | 94.5 | 1.6 | −92.9 |
 
-```bash
-mkdir -p data/osrm
-curl -fL -o data/osrm/maharashtra-latest.osm.pbf \
-  https://download.openstreetmap.fr/extracts/asia/india/maharashtra-latest.osm.pbf
-head -c 32 data/osrm/maharashtra-latest.osm.pbf | grep -aq OSMHeader || echo "not a PBF"
-```
+**Where the gain actually comes from, since the decomposition is not flattering.** Two thirds of it
+— ₹23,212 of ₹35,500 — is time-window penalty the benchmark incurs because it ignores windows
+entirely, by construction. On the three physical components alone (distance, driver time, fleet) the
+improvement is **−5.5%**, and the fleet does not shrink at all: both plans deploy 96 vehicle-days,
+because vehicle count is floored by total mass and neither solver can change the mass. What the
+optimizer buys is *shorter tours that arrive on time*, not a smaller fleet.
 
-Maharashtra (~165 MB) rather than all of India (~1.2 GB): it covers the whole bounding box in
-`GeoConfig` with room to spare, and preprocesses in minutes instead of hours.
+**Read −14.4% as a lower bound.** The optimized run is truncated: every hub stops on
+`stagnation_limit = 75` rather than exhausting the 600-generation budget (76–463 generations,
+median 97), and 15 of the 16 hubs are sitting at an adaptive time-window penalty of ×8 or above when
+they stop — i.e. they stop against a distorted objective rather than the one being reported. On the
+largest hub this has been measured directly: three different penalty schedules each recover
+**₹650–695** there, worth ≈0.3 percentage points of headline on that one hub alone. The mechanism
+is localised and understood but not solved, and the candidate fix ships switched off — limitation 9
+is the full account. Step 9 re-measures the headline once the penalty schedule is settled.
 
-The mirror is openstreetmap.fr because Geofabrik publishes India only as six multi-state zones,
-with no per-state Maharashtra extract. Check the magic bytes as above — a mirror that answers an
-unknown path with a redirect to its index page hands you a 9 kB HTML file, and `osrm-extract`
-reports that twenty minutes later as `invalid BlobHeader size` rather than as a failed download.
-`make osrm` does this check for you and downloads to a temporary name so a bad fetch cannot be
-mistaken for a good one on the next run.
+Also measured, both single-instance:
 
-### 2. Preprocess — extract, partition, customize
+- **Memetic local search is worth −2.84%** per drop (nearest-hub) and −2.27% (balanced), clearing
+  the GA-seed noise floor at 3.30× and 2.68×. It is an upper bound, not an estimate — the arms were
+  not truncated identically, and the asymmetry flatters local search. Limitation 7.
+- **Capacity-balanced hub assignment does not pay: +1.74%.** It removes the imbalance it targets and
+  costs money on *both* legs. What it buys instead is variance reduction — 3.8× steadier across GA
+  seeds. Limitation 6.
 
-```bash
-docker compose --profile build run --rm osrm-extract
-docker compose --profile build run --rm osrm-partition
-docker compose --profile build run --rm osrm-customize
-```
-
-These write the `.osrm.*` graph files next to the `.pbf`, and only need re-running when the
-extract changes.
-
-**Use MLD, not CH.** `osrm-partition` + `osrm-customize` is the multi-level Dijkstra pipeline. The
-contraction-hierarchies alternative (`osrm-contract`) answers `/table` with durations but **no
-distances**, and this codebase needs both — `src/costs/matrix.py` rejects a response missing the
-`distances` annotation and names this as the likely cause.
-
-### 3. Run the server
-
-```bash
-make osrm-up      # or: docker compose up -d osrm
-curl "http://127.0.0.1:5001/table/v1/driving/72.8347,18.9220;72.8355,18.9398?annotations=distance,duration"
-```
-
-The container runs `osrm-routed --algorithm mld --max-table-size 100`.
-
-**The published port is 5001, not OSRM's usual 5000.** macOS binds 5000 to the AirPlay Receiver
-by default, so 5000 fails on a fresh clone on every Mac. `RunConfig.osrm_url` defaults to the
-same 5001. To use 5000 instead — after freeing it in *System Settings › General › AirDrop &
-Handoff* — set `OSRM_PORT=5000` and change `RunConfig.osrm_url` to match. Change both: a
-mismatch makes the pipeline fall back to haversine, which looks like an OSRM outage rather than
-a misconfiguration.
-
-### 4. Sanity-check the numbers
-
-```bash
-make providers
-```
-
-Prints road distances between eight Mumbai landmarks under both providers, side by side with the
-great-circle distance, plus the circuity each pair implies. Two things to look at:
-
-- **OSRM / crow** is where `circuity_factor` comes from. Measured against a live MLD build of the
-  Maharashtra extract, the eight landmarks give **1.13–1.40, mean 1.28**, which is why the
-  default is 1.30. Long trunk routes sit at the bottom of that range (Gateway → Thane, 1.13) and
-  short suburban hops at the top (BKC → Powai, 1.40) — circuity always rises as legs shorten.
-- The **traffic** section applies the bands to a single 30-minute leg at five departure times.
-  A leg leaving at 10:45 must come out at an effective 1.32× — between the 1.6 of the morning
-  peak and the 1.2 of midday — because it crosses the 11:00 boundary. Five identical numbers
-  there would mean the multipliers are not being applied at all.
+Step 7's full working — predictions registered before the run, both replications, the noise
+probe — is in [`docs/step7-ablation.md`](docs/step7-ablation.md).
 
 ---
 
-## Why the matrix is chunked and cached
+## The instance
 
-Two constraints shape `src/costs/matrix.py`, and both are load-bearing rather than incidental:
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figures/instance_seed42_dark.png">
+  <img src="figures/instance_seed42_light.png" width="620"
+       alt="Seed 42: 16 hubs, 300 sources and 800 customers over the Mumbai / Navi Mumbai box">
+</picture>
 
-**OSRM caps a `/table` request** at `max-table-size²` cells — 10,000 on the demo server's default
-of 100. The instance here is ~1116 nodes, or 1.25 million cells, so the matrix is walked as a grid
-of square blocks and reassembled. Each request carries only its own block's coordinates, because
-putting all 1116 in the URL with index selectors produces a 22 kB request line the server will not
-accept.
+Generated by `make data` from a seed alone — no network access, no external data. 55% of sources and
+customers are drawn around four density clusters, whose centres are themselves placed at random
+inside the box, and the rest are uniform; hubs are k-means centroids over a candidate pool. The
+clusters are what make the instance non-trivial — nearest-hub assignment is lopsided precisely
+because the clusters do not sit one per hub. Shipments are 37.5 kg each against a 750 kg vehicle —
+a Tata Ace class SCV — and 75% of customers carry a 2–4 hour delivery window.
 
-**The assembled matrix is cached to parquet** under
-`data/cache/matrix_seed{seed}_{provider}_n{nodes}_{digest}.parquet`. The genetic algorithm reads
-the matrix millions of times per run; without the cache, matrix I/O rather than search would
-dominate every runtime figure the repository reports. The coordinate digest is in the key because
-two runs can share a seed and a node count while placing nodes differently, and the provider is in
-the key because a fallback run must never load an entry written by a road-network run.
+The seed fixes everything downstream, including the distance-matrix cache key, which is what makes a
+run repeatable. All data is synthetic; see limitations 2 and 4.
 
 ---
 
-## Traffic
+## Architecture
 
-A static time-of-day multiplier, applied **cumulatively along a route**:
+| Stage | Problem | Scope | Solver |
+|---|---|---|---|
+| 1 — inbound | consolidation | ~300 sources → 16 hubs; tours are hub → sources → hub | hub assignment (nearest-hub by default; min-cost-flow balancing as the measured alternative), then one OR-Tools CVRP per hub |
+| 2 — final mile | capacitated VRP with soft time windows | 16 hubs → ~800 customers; tours are hub → customers → hub | hand-written genetic algorithm, one independent GA per hub |
+
+Pickup-before-delivery precedence is enforced **structurally**, by stage ordering: a customer is
+served from the hub its parcel actually reached, so no repair operator and no precedence constraint
+is needed anywhere in the codebase. The cost of that simplicity is named as limitation 1 — the
+decomposition is greedy, and the assignment that is optimal for inbound need not be optimal for
+outbound. Step 7 measured that coupling rather than assuming it away.
+
+**Why OR-Tools for Stage 1.** The inbound leg is a textbook CVRP: fixed depot, no time windows,
+16 independent subproblems of ~19 stops each. There is nothing to learn from re-implementing guided
+local search for it, and OR-Tools' first-solution heuristics plus GLS are a strong, boring baseline.
+Hubs do not interact once the assignment is fixed, so this is 16 small models in a process pool
+rather than one 285-stop model that would spend its whole time limit on a search space that is
+mostly infeasible by construction.
+
+**Why a hand-written GA for Stage 2.** This is the part of the repository that exists to be read.
+The final mile is where the problem stops being textbook — soft time windows, a traffic multiplier
+that accumulates along the route, and a cost function in which a local move has a global effect —
+and it is where a solver's design decisions are visible. Writing it by hand means the encoding, the
+operators, the penalty schedule and the local search are all inspectable and all argued for in the
+module docstrings. Calling `RoutingModel` again would have hidden exactly the thing worth showing.
+
+**Which is why step 8 measures the gap rather than asserting there isn't one.** Step 8 adds an
+OR-Tools reference solve of the *same* Stage 2 problem, behind a `--reference` flag, outside the
+pipeline. The deliverable is the measured gap between the hand-written GA and a mature solver on
+identical input, whatever that gap turns out to be. The GA is not tuned to beat it.
+
+### Repository layout
+
+| Path | What lives there |
+|---|---|
+| `src/config.py` | every tunable and every constant, as frozen dataclasses; nothing is read at module level |
+| `src/costs/` | chunked OSRM distance/duration matrix, parquet cache, cumulative traffic model |
+| `src/tour.py` | the one place a sequence of stops becomes a timed, band-blended route |
+| `src/scoring.py` | `evaluate_solution()` — the single scoring path, called by baseline and pipeline alike |
+| `src/baseline/greedy.py` | the frozen control; forbidden by test from importing either stage |
+| `src/stage1/` | `assignment.py` (min-cost flow), `cvrp.py` (per-hub OR-Tools under a spawn pool) |
+| `src/stage2/` | `split.py`, `operators.py`, `local_search.py`, `penalty.py`, `ga.py`, `solve.py` |
+| `src/cli/` | the `make` entry points; the only files in the repo allowed to `print()` |
+
+---
+
+## Inside the Stage 2 GA
+
+Four decisions carry the design. Each is argued at length in its own module docstring.
+
+**The chromosome has no vehicle boundaries.** It is a plain permutation of one hub's customers, and
+`split()` derives the vehicle boundaries by shortest path over an auxiliary DAG: node *i* means "the
+first *i* customers have been served", arc *(i, j)* means "one vehicle serves positions *i+1..j* as
+a single tour", weighted by what that tour costs. This is route-first / cluster-second, after
+Prins (2004). The alternative — writing delimiters into the chromosome — makes crossover recombine
+the cut points too, which emits over-capacity tours constantly and needs a repair operator; repair
+then decides what the population looks like, instead of selection. Here the delimiters are never
+searched. They are *derived optimally* for whatever order the GA proposes, so every chromosome maps
+to a feasible plan, and to the best plan its order admits.
+
+**Capacity is hard by construction; time windows are soft.** An arc whose load exceeds one vehicle
+is never created in the DAG, so an over-capacity tour is not expensive — it is unrepresentable.
+Capacity never appears as a fitness penalty anywhere. Lateness, by contrast, is priced into the arc
+weight, so the search prefers a time-feasible partition but still returns a complete plan when none
+exists. That is the point of a soft constraint.
+
+**The time-window penalty adapts, and the two objectives are kept apart.** The multiplier starts at
+×1 and doubles every 10 generations toward a 10% violation rate, capped at ×64. Selection, local
+search and the diversity guard all rank on that *search* objective; the incumbent returned at the
+end is tracked on the **configured** objective at ×1, because that is what `evaluate_solution()`
+will charge and it is the only number that means anything outside the loop. Keeping them separate is
+what lets the penalty move freely without the answer depending on where the multiplier happened to
+be when the run stopped.
+
+**Local search is Lamarckian and intra-route only.** Each generation, 10% of the population has each
+of its vehicle tours 2-opted, and the improvement is written back into the chromosome so the GA
+inherits it. Moves are never evaluated across two routes: a route holds at most 20 stops, so a full
+2-opt neighbourhood is 190 candidates priced in microseconds, whereas proposing moves on the whole
+permutation would cost a full re-split per candidate to buy work-shifting that `split()` is free to
+do on the next generation anyway. There is **no delta evaluation**, deliberately — `beta` is
+time-denominated and traffic accumulates along the route, so reversing a segment changes the arrival
+time, and therefore the lateness, at every later stop. Every candidate is priced in full.
+
+Supporting parts: OX crossover and or-opt mutation (segment length ≤ 3), both property-tested to
+return a permutation of their input; tournament selection at *k* = 5; elitism 3; a diversity guard
+that mutates a duplicate child rather than spending a generation on a converged population; and
+three nearest-neighbour seeds from distinct starting stops, the rest of the first generation random
+— three rather than thirty because greedy orders from different starts agree wherever the greedy
+choice is unambiguous, so each extra seed buys less diversity than the random individual it evicts.
+
+**Reproducibility is a design constraint, not a habit.** Per-hub solves run under a
+`multiprocessing` **spawn** pool — OR-Tools starts threads and forking a threaded process is
+undefined. A worker receives its own sliced matrices in a frozen dataclass and nothing else: no
+`Config`, no `Instance`, no `Generator`. Randomness goes through an injected
+`np.random.Generator`; there is no global mutable state and no module-level config read anywhere in
+`src/`. A shared generator across workers would leave the run succeeding while its numbers quietly
+stopped being repeatable, which is the failure mode this structure exists to prevent.
+
+---
+
+## Cost model and traffic
+
+Every reported figure is rupees, from four components:
+
+| Symbol | Component | Unit | Default | Scales with |
+|---|---|---|---|---|
+| `alpha` | variable running cost | ₹/km | 9.0 | distance |
+| `beta` | driver / labour | ₹/hour | 95.0 | duration |
+| `gamma` | fixed vehicle | ₹/vehicle/day | 1,000.0 | fleet deployed |
+| — | time-window penalty | ₹/hour late | 250.0 | lateness |
+
+Order-of-magnitude figures for a Tata Ace class SCV — 750 kg payload, ~21 kmpl. Capacity and
+shipment size are configuration variables, never literals; mixed fleet and mixed shipment sizes are
+named roadmap extensions.
+
+Traffic is a static time-of-day multiplier applied **cumulatively along a route**:
 
 | Band | Multiplier |
 |---|---|
@@ -144,10 +215,67 @@ A static time-of-day multiplier, applied **cumulatively along a route**:
 | 21–08 | 1.0 |
 
 A leg is integrated across every band boundary it crosses, not scaled by the multiplier in force
-at its departure. Leaving at 10:45 with 30 minutes of free-flow time, the first quarter-hour is
+when it departs. Leaving at 10:45 with 30 minutes of free-flow time, the first quarter-hour is
 driven at 1.6× and the remainder at 1.2×, arriving at 11:24:45 rather than 11:33 or 11:21. Because
-`driver_per_hour` is time-denominated, this is what makes *when* a route is driven change its cost
-rather than decorate it.
+`beta` is time-denominated, this is what makes *when* a route is driven change what it costs rather
+than merely decorate it — and it is why the local search cannot use delta evaluation.
+`make providers` prints one leg at five departure times so the blending is visible; five identical
+numbers there would mean the multipliers were not being applied at all.
+
+### The distance matrix
+
+Two constraints shape `src/costs/matrix.py`, both load-bearing.
+
+**OSRM caps a `/table` request** at `max-table-size²` cells — 10,000 at the default of 100. This
+instance is ~1,116 nodes, or 1.25 million cells, so the matrix is walked as a grid of square blocks
+and reassembled. Each request carries only its own block's coordinates: putting all 1,116 in the URL
+with index selectors produces a 22 kB request line the server rejects.
+
+**The assembled matrix is cached to parquet**, keyed by `(seed, provider, n_nodes, coord_hash)`.
+The GA reads the matrix millions of times per run; without the cache, matrix I/O rather than search
+would dominate every runtime figure quoted here. The provider is in the key so a fallback run can
+never load an entry written by a road-network run.
+
+---
+
+## Running it
+
+No setup, no Docker, no OSM data — the cost layer has a great-circle fallback:
+
+```bash
+make data                                              # seeded instance + the scatter above
+.venv/bin/python -m src.cli.run_baseline --no-osrm     # greedy benchmark + metrics table
+```
+
+Distances are then haversine × `circuity_factor` (1.30) at 24 km/h. Those are estimates, not road
+figures, and every run that uses them says so at `WARNING`. Results from the two providers must not
+be compared (limitation 5).
+
+### Real road distances
+
+```bash
+make osrm       # one-time: download extract, extract/partition/customize, then start the server
+make osrm-up    # start it thereafter; osrm-down to stop
+make providers  # sanity check: 8 Mumbai landmarks under both providers, plus the traffic bands
+```
+
+`make osrm` takes 15–30 minutes and ~4 GB of RAM, and it does three non-obvious things by hand:
+
+- **Maharashtra from openstreetmap.fr, checked for magic bytes.** Geofabrik publishes India only as
+  six multi-state zones with no per-state extract, and a mirror that answers an unknown path with a
+  redirect hands you a 9 kB HTML file that `osrm-extract` reports twenty minutes later as `invalid
+  BlobHeader size`. The download goes to a temporary name so a bad fetch cannot be mistaken for a
+  good one next run.
+- **MLD, not CH.** `osrm-partition` + `osrm-customize`, because the contraction-hierarchies
+  alternative answers `/table` with durations but **no distances**, and this codebase needs both.
+- **Port 5001, not OSRM's usual 5000.** macOS binds 5000 to the AirPlay Receiver, so 5000 fails on a
+  fresh clone on every Mac. `RunConfig.osrm_url` and `docker-compose.yml` must agree; a mismatch
+  falls back to haversine and reads as an outage rather than a misconfiguration.
+
+`make providers` is also where `circuity_factor` comes from: against a live MLD build, the eight
+landmarks give **1.13–1.40, mean 1.28**, which is why the default is 1.30. Long trunk routes sit at
+the bottom (Gateway → Thane, 1.13) and short suburban hops at the top (BKC → Powai, 1.40), since
+circuity always rises as legs shorten.
 
 ---
 
@@ -328,6 +456,10 @@ Stated plainly, and not softened anywhere else in the repository:
    but it does mean the memetic step is entangled with hub 9's convergence and is not the neutral
    candidate the list implies.
 
+   **This is what makes the −14.4% headline a lower bound** rather than an estimate: 15 of the 16
+   hubs stopped at ×8 or above, so every reported plan was selected against a distorted objective,
+   and the one hub measured under a corrected schedule got cheaper.
+
 10. **Guided local search under a wall-clock limit is not bit-reproducible.** It returns whatever
     it had reached when the clock ran out, so the same seed on a busier machine can yield a
     different plan. Run `--deterministic` to stop at the first-solution heuristic, which is
@@ -351,20 +483,15 @@ Stated plainly, and not softened anywhere else in the repository:
 ## Development
 
 ```bash
-make test      # ruff check + ruff format --check + mypy --strict + pytest
-make data      # regenerate the instance
-make providers # landmark distance comparison
+make test      # the gate: ruff check + ruff format --check + mypy --strict + pytest
+make cov       # line coverage against the >= 90% standard (currently 99%)
+make data      # regenerate the instance and its scatter
+make providers # landmark distance comparison + traffic bands on one leg
 make baseline  # greedy nearest-neighbour benchmark, print its metrics
 make stage1    # inbound leg: baseline vs the CVRP under each hub assignment
 make run       # full Stage 1 + Stage 2 pipeline on one seed, against the baseline
 make ablation  # step 7's 2x2: local search on/off x nearest/balanced, end to end
-make osrm      # one-time OSRM setup, then start the server
-make osrm-down # stop it
 ```
-
-Step 7's full working — the predictions recorded before the run, both replications and the
-noise-floor probes — is in [`docs/step7-ablation.md`](docs/step7-ablation.md). Limitations 6 and 7
-above are its conclusions.
 
 Extra flags go through `ARGS`, because `make` claims a bare `--flag` on its own command line as one
 of its options and exits before Python sees it:
@@ -374,7 +501,14 @@ make run ARGS="--strategy balanced"        # one arm of the assignment ablation
 make ablation ARGS="--probe-arm balanced"  # reseed the balanced arm for the noise floor
 ```
 
-No test touches the network. The OSRM provider is exercised against a loopback stub
-(`tests/osrm_stub.py`) that speaks OSRM's real URL grammar and enforces the same
-`max_table_size²` cell budget the production server does, so a chunking regression fails the suite
-exactly as it would fail against a live instance.
+Tests mirror the source tree and every one of them is seeded. Property-based tests (`hypothesis`)
+are mandatory on `split()` — every returned route respects capacity, and the union of routes is
+exactly the input permutation — and on crossover and mutation, which must always return a
+permutation of their input. `split()` additionally carries a regression test on an instance where
+left-to-right greedy filling is provably *not* optimal, because that is the canonical way to get
+this algorithm wrong.
+
+**No test touches the network.** The OSRM provider is exercised against a loopback stub
+(`tests/osrm_stub.py`) that speaks OSRM's real URL grammar and enforces the same `max_table_size²`
+cell budget the production server does, so a chunking regression fails the suite exactly as it would
+fail against a live instance.
