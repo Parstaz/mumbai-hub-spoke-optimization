@@ -211,22 +211,74 @@ Stated plainly, and not softened anywhere else in the repository:
    the negative result is the interesting half of the ablation. `make stage1` prints all three
    columns side by side and states the verdict from the numbers.
 
-   **That verdict is about the inbound leg alone, and step 6 found something it could not see.** A
-   customer is served from the hub its parcel reached, so the assignment propagates: balancing
-   also cuts Stage 2's largest hub from **236 stops to 73** (median 36 → 58). That is not just
-   cheaper to price. For a fixed generation budget a flatter distribution is a smaller search
-   space per stop, so equal GA effort buys more optimisation. Whether it pays back the 1.7% is
-   **step 7's question and is not answered here** — `make run --strategy {nearest,balanced}`
-   carries the flag through both stages so the ablation can measure it end to end. Read the total
-   cost per drop, not the two legs separately: reading them separately is what hid this.
+   **Step 6 suspected the inbound-only verdict was incomplete. Step 7 measured it, and the
+   suspicion was wrong.** A customer is served from the hub its parcel reached, so the assignment
+   propagates: balancing cuts Stage 2's largest hub from **236 stops to 73** (median 36 → 58).
+   Step 6 argued that for a fixed generation budget a flatter distribution is a smaller search
+   space per stop, so equal GA effort would buy more optimisation and might repay the 1.7%.
 
-7. **OR-Tools optimises a static arc cost.** A `RoutingModel` fixes arc costs before the search
+   **It does not. Balancing makes the final mile dearer too**, on the very leg the argument said it
+   would help:
+
+   | seed 42, both arms with local search | nearest | balanced | |
+   |---|---|---|---|
+   | stage 1 inbound ₹ | 66,261 | 67,365 | +1.67% |
+   | **stage 2 final mile ₹** | **145,443** | **148,031** | **+1.78%** |
+   | total ₹ | 211,704 | 215,396 | +1.74% |
+   | cost per drop ₹ | 264.63 | 269.25 | +1.75% |
+
+   The sign holds without local search (151,631 → 153,038) and at every GA seed tried — balanced
+   sits above nearest at all three matched seeds, by ₹4.61, ₹5.15 and ₹2.34 per drop. Balanced was
+   not starved of search either: it ran a median 210 generations against nearest's 97, because
+   smaller hubs are cheaper per generation. More iterations, on a flatter distribution, on the hub
+   the argument rested on — and a worse outbound leg.
+
+   **The mechanism is real; it just delivers the wrong good.** Across GA seeds the balanced arm is
+   **3.8× steadier** than nearest — range ₹0.61 against ₹2.34. A smaller search space per stop buys
+   a *more consistent* answer, not a better one: lower variance on a mean ₹4/drop worse.
+
+   The reason is the same one that sinks the inbound leg. Balancing does buy time-window
+   compliance — 7 violations and 0.7 h lateness against nearest's 9 and 1.6 h — and pays for it in
+   **205 km** (9,095 km against 8,890 km). At ₹9/km plus driver time the distance dominates, on the
+   outbound leg exactly as on the inbound one: relocating a stop to a less-loaded hub buys a longer
+   radial leg, and the flatter search space never gets a chance to pay for it.
+
+   Read the *total* cost per drop, not the two legs separately. On seed 42 the total (+1.74%) and
+   the inbound leg (+1.67%) both round to +1.7%, which reads as though Stage 2 were neutral. It is
+   not — it moved the same way by 1.78%. `make ablation` prints all four arms with both legs
+   beneath the total, and states the verdict from the numbers.
+
+7. **The memetic local search pays, but −2.84% is an upper bound rather than an estimate.**
+   Switching it off (`local_search_pct = 0`) costs **2.84%** per drop under nearest-hub assignment
+   and **2.27%** under balanced — ₹7.73 and ₹6.26 per drop, same sign under both, and clearing the
+   seed-to-seed noise floor at 3.30× and 2.68×. It is also faster in wall clock on nearest (1,422 s
+   against 2,216 s), because the memetic arm converges in a median 97 generations against 185.
+
+   The qualification: **the arms were not truncated identically, and the asymmetry flatters local
+   search.** Hub 9 exhausted the 600-generation ceiling in *both* no-local-search arms and in
+   *neither* local-search arm — 15 of 16 hubs stopped early against 16 of 16. The control was
+   therefore cut off rather than converged on its largest hub:
+
+   | hub 9, nearest, seed 42 | generations | ₹ |
+   |---|---|---|
+   | local search on | 195 (converged) | 28,640 |
+   | local search off | **600 (ceiling)** | 30,235 |
+
+   That one hub carries **₹1,595 of the ₹6,188 total gain** on nearest — 26% of it — on the arm
+   that ran out of budget. So −2.84% should be read as "no worse than 2.84% better". `make ablation`
+   detects the asymmetry and prints it; it does not assume truncation is symmetric, because on this
+   run it is not.
+
+   Also single-instance: three GA seeds on seed 42's geography. Step 9's multi-seed evaluation is
+   what would generalise it.
+
+8. **OR-Tools optimises a static arc cost.** A `RoutingModel` fixes arc costs before the search
    begins, so the cumulative traffic model cannot live inside it; Stage 1's arc cost uses the
    dispatch-hour multiplier as a stand-in. Every *reported* distance, duration and arrival time
    still comes from the cumulative band-blended model in `src/tour.py`. The proxy affects which
    tour is chosen, never what that tour is then said to cost.
 
-8. **The GA stops early on some hubs against a distorted objective — localised, not solved.** On
+9. **The GA stops early on some hubs against a distorted objective — localised, not solved.** On
    seed 42 every hub ends on `stagnation_limit = 75` rather than on `generations = 600`, between 76
    and 463 generations. On hub 9 that early stop costs real money, and four schedule variants show
    it:
@@ -265,14 +317,34 @@ Stated plainly, and not softened anywhere else in the repository:
    share, the diversity guard's interaction with any of those, or hub geometry itself — 236 stops
    against hub 0's 85. Each is a further 30–60 minute run and nothing in the evidence orders them,
    which is exactly what makes that search unbounded. The mechanism is localised, the candidate fix
-   ships behind `penalty_warmup_generations` (default 0 — the schedule unchanged), and it stays off
-   until step 7 measures it across hubs and seeds. Recorded as a limitation rather than solved.
+   ships behind `penalty_warmup_generations` (default 0 — the schedule unchanged), and it stays off.
+   Step 7 did **not** measure it: the four arms held it at 0 precisely so the ablation measured
+   local search and hub assignment and not a third knob. **Step 9** is where it gets tested across
+   hubs and seeds. Recorded as a limitation rather than solved.
 
-9. **Guided local search under a wall-clock limit is not bit-reproducible.** It returns whatever
-   it had reached when the clock ran out, so the same seed on a busier machine can yield a
-   different plan. Run `--deterministic` to stop at the first-solution heuristic, which is
-   reproducible; the test suite does. Step 9's multi-seed evaluation reports a spread for this
-   reason.
+   One datum step 7 did produce, on the local-search share this list names as uninvestigated: with
+   local search *off*, hub 9 runs to the 600-generation ceiling instead of stopping early. That does
+   not explain the early stop — it is one hub, one seed, and the off arm is also the dearer one —
+   but it does mean the memetic step is entangled with hub 9's convergence and is not the neutral
+   candidate the list implies.
+
+10. **Guided local search under a wall-clock limit is not bit-reproducible.** It returns whatever
+    it had reached when the clock ran out, so the same seed on a busier machine can yield a
+    different plan. Run `--deterministic` to stop at the first-solution heuristic, which is
+    reproducible; the test suite does.
+
+    **Measured in step 7, it does not propagate across the stage boundary.** Three independent
+    full runs on seed 42 agree to **₹0.01 per drop**; two of the three are bit-identical on every
+    arm, cost component and generation figure. Stage 1's search perturbs tour *ordering* within a
+    hub — worth ₹1–5 out of ₹66,000 — but does not change the source-to-hub assignment, so the
+    customer-to-hub mapping is identical and an identical mapping with an identical per-hub GA seed
+    yields an identical Stage 2.
+
+    The consequence for step 9 is a split. Against Stage 1 noise, one run per seed is a sound point
+    estimate. Against the **GA** seed it is not: `Stage2Task.seed` is `RunConfig.seed`, so a
+    multi-seed run varies the instance and the GA draw together and cannot separate them. On seed 42
+    the GA draw alone spans ₹2.34 per drop on the nearest arm, against effects of ₹4.6–7.7. Report a
+    per-seed spread, not a mean.
 
 ---
 
@@ -284,8 +356,22 @@ make data      # regenerate the instance
 make providers # landmark distance comparison
 make baseline  # greedy nearest-neighbour benchmark, print its metrics
 make stage1    # inbound leg: baseline vs the CVRP under each hub assignment
+make run       # full Stage 1 + Stage 2 pipeline on one seed, against the baseline
+make ablation  # step 7's 2x2: local search on/off x nearest/balanced, end to end
 make osrm      # one-time OSRM setup, then start the server
 make osrm-down # stop it
+```
+
+Step 7's full working — the predictions recorded before the run, both replications and the
+noise-floor probes — is in [`docs/step7-ablation.md`](docs/step7-ablation.md). Limitations 6 and 7
+above are its conclusions.
+
+Extra flags go through `ARGS`, because `make` claims a bare `--flag` on its own command line as one
+of its options and exits before Python sees it:
+
+```bash
+make run ARGS="--strategy balanced"        # one arm of the assignment ablation
+make ablation ARGS="--probe-arm balanced"  # reseed the balanced arm for the noise floor
 ```
 
 No test touches the network. The OSRM provider is exercised against a loopback stub
