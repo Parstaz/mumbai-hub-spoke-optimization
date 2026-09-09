@@ -328,6 +328,67 @@ The live risk is seed 44 specifically, where `nearest` was itself the outlier at
 only ₹2.27 of headroom. If `balanced` happens not to have a matching outlier at 44, that is the
 seed where a crossing would show up.
 
-### Results
+### Results — prediction held, at all three matched seeds
 
-*Appended when run 3 completes.*
+| GA seed | nearest +l.s. ₹ | balanced +l.s. ₹ | gap |
+|---|---|---|---|
+| 42 | 264.63 | 269.24 | **+4.61** |
+| 43 | 264.70 | 269.85 | **+5.15** |
+| 44 | 266.97 | 269.31 | **+2.34** |
+
+`balanced` stays above `nearest` at **3 of 3** matched seeds. Gap: min ₹2.34, mean ₹4.03, max ₹5.15.
+No crossing. By the pre-registered criterion, **the disconfirmation holds under reseeding**: step 6's
+hypothesis is refuted in direction, and the direction is robust to the GA draw. Limitation 6's
+amendment is rewritten as wrong rather than recorded as untested.
+
+Seed 44 was named in advance as the live risk and it was indeed the tightest of the three, at ₹2.34
+— but it held, and it held because `balanced` did **not** have a matching outlier there.
+
+### The right test was the paired one, and it is cleaner than the ratio it replaces
+
+Run 2 left the balanced penalty looking shaky: ₹4.61 against a `nearest` floor of ₹2.34, a margin of
+only 1.97×. That comparison was the wrong shape. It set a *between-arm* gap against a *within-arm*
+spread, which conflates two different quantities — if both arms move together when the seed changes,
+the gap can be stable even when each arm is not.
+
+That is exactly what happened. Pairing at matched seeds, the gap is positive every time. The 1.97×
+figure understated the evidence because seed 44's ₹2.34 excursion is largely common-mode: `nearest`
+moved up and `balanced` barely did, which shrinks the gap but never inverts it.
+
+### A finding that was not predicted: balanced is the *steadier* arm
+
+| arm | seed 42 | 43 | 44 | range |
+|---|---|---|---|---|
+| nearest +l.s. | 264.63 | 264.70 | 266.97 | **2.34** |
+| balanced +l.s. | 269.24 | 269.85 | 269.31 | **0.61** |
+
+`balanced` is **3.8× tighter** across GA seeds. That is step 6's mechanism showing up after all —
+just not as the thing it was claimed to deliver. A flatter hub distribution does give the GA a
+smaller search space per stop, and the effect of that is a **more consistent** answer, not a
+**better** one. The hypothesis predicted that equal effort would buy more optimisation; what equal
+effort actually buys is lower variance, on a mean that is ₹4 per drop worse.
+
+The write-up above stands: the payoff claim is refuted. This refines *why* rather than softening it.
+
+### Third replication, free
+
+| arm | run 1 | run 2 | run 3 | spread |
+|---|---|---|---|---|
+| nearest +l.s. | 264.63 | 264.63 | 264.63 | 0.00 |
+| nearest −l.s. | 272.36 | 272.36 | 272.36 | 0.00 |
+| balanced +l.s. | 269.25 | 269.24 | 269.24 | 0.01 |
+| balanced −l.s. | 275.50 | 275.50 | 275.50 | 0.00 |
+
+Runs 2 and 3 are **bit-identical** on every arm, every cost component and every generation figure;
+run 1 differs only in Stage 1 by ₹1–5. Three independent runs, total spread ≤ ₹0.01 per drop. The
+replication conclusion from run 2 is reinforced: at a fixed GA seed this pipeline is effectively
+deterministic end to end, and Stage 1's guided local search does not propagate across the stage
+boundary on this instance.
+
+### What is still not established
+
+Three GA seeds on **one instance**, seed 42. Everything above is a statement about this instance's
+geography. Whether `balanced` loses on other instances — and whether its lower variance ever buys
+enough to overturn the mean on a differently-shaped one — is step 9's question, and the variance
+finding is a concrete reason to look: an arm that is 3.8× steadier is one whose *worst* seed is
+better behaved, which a mean over few seeds will not show.
