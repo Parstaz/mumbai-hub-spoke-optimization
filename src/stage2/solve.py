@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 import multiprocessing
 import os
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -55,17 +56,46 @@ _LOCAL_HUB_NODE = NodeId(0)
 
 
 @dataclass(frozen=True, slots=True)
+class HubRun:
+    """One hub's search result, and the wall clock it took to get there.
+
+    The elapsed time is deliberately **not** a field on :class:`~src.stage2.ga.HubOutcome`. Two
+    runs of the same search over the same seed must compare equal — ``tests/test_ga.py`` asserts
+    exactly that on whole outcomes — and a wall clock never repeats, so putting it there would
+    make every such comparison fail for a reason that has nothing to do with the search.
+
+    It is measured **inside** the pool worker, around ``evolve()`` alone. Time spent queued behind
+    a full pool is therefore excluded, which is what makes this figure the budget the search
+    actually consumed rather than how long the hub waited for a core. That matters because
+    :mod:`src.stage2.ortools_reference` spends this number as its own budget.
+    """
+
+    outcome: HubOutcome
+    elapsed_s: float
+
+
+@dataclass(frozen=True, slots=True)
 class Stage2Plan:
     """The final-mile tours, and what each hub's search actually did to produce them.
 
-    ``outcomes`` is returned rather than logged and dropped because the configured generation
+    ``runs`` is returned rather than logged and dropped because the configured generation
     budget is not the budget spent — every hub on seed 42 stopped on ``stagnation_limit`` well
     short of it. A caller that reports "150x600" without saying what was used is describing a run
     that did not happen, so the entry point needs the figures, not just the routes.
     """
 
     routes: tuple[Route, ...]
-    outcomes: tuple[HubOutcome, ...]
+    runs: tuple[HubRun, ...]
+
+    @property
+    def outcomes(self) -> tuple[HubOutcome, ...]:
+        """Each hub's search outcome, in hub order.
+
+        Kept as the public shape because every existing caller reports on outcomes and none of
+        them has any use for a wall clock. Only the OR-Tools reference needs the timings, and it
+        reads ``runs`` directly.
+        """
+        return tuple(run.outcome for run in self.runs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,11 +137,11 @@ def solve_stage2(
     Returns:
         Every deployed tour across all hubs in hub order, with each hub's search outcome.
     """
-    workloads = _workloads(instance, hub_of_stop, config)
+    workloads = hub_workloads(instance, hub_of_stop, config.fleet.vehicle_capacity_kg)
     tasks = tuple(
         _hub_task(workload, instance, matrices, traffic, config) for workload in workloads
     )
-    outcomes = _solve_all(tasks, config.stage1.workers)
+    runs = _solve_all(tasks, config.stage1.workers)
 
     routing = RoutingContext(
         matrices=matrices,
@@ -121,32 +151,38 @@ def solve_stage2(
         capacity_kg=instance.fleet.vehicle_capacity_kg,
     )
     routes: list[Route] = []
-    for workload, outcome in zip(workloads, outcomes, strict=True):
+    for workload, run in zip(workloads, runs, strict=True):
         context = SplitContext(
             workload=workload,
             routing=routing,
             pricing=hub_pricing(workload, instance),
             cost_config=config.cost,
         )
-        if outcome.hub_id != workload.hub_id:
+        if run.outcome.hub_id != workload.hub_id:
             raise InfeasibleSolutionError(
-                f"hub {workload.hub_id}'s workload was paired with hub {outcome.hub_id}'s plan"
+                f"hub {workload.hub_id}'s workload was paired with hub {run.outcome.hub_id}'s plan"
             )
-        routes.extend(split(outcome.permutation, context).routes)
-    return Stage2Plan(routes=tuple(routes), outcomes=outcomes)
+        routes.extend(split(run.outcome.permutation, context).routes)
+    return Stage2Plan(routes=tuple(routes), runs=runs)
 
 
-def _log_finished(outcome: HubOutcome, done: int, total: int) -> None:
-    """Report one hub the moment it lands, so a long solve is not silent while it runs."""
+def _log_finished(run: HubRun, done: int, total: int) -> None:
+    """Report one hub the moment it lands, so a long solve is not silent while it runs.
+
+    The elapsed figure is logged as well as returned: it is the budget the OR-Tools reference will
+    be given for this hub, and seeing it per hub as the run proceeds is what makes a matched-budget
+    comparison auditable from the log rather than only from the final table.
+    """
     logger.info(
-        "hub %2d done (%2d/%d): %3d stops, %d generations, penalty x%.2f, %.0f INR",
-        outcome.hub_id,
+        "hub %2d done (%2d/%d): %3d stops, %d generations, penalty x%.2f, %.0f INR, %.1f s",
+        run.outcome.hub_id,
         done,
         total,
-        len(outcome.permutation),
-        outcome.generations_run,
-        outcome.final_multiplier,
-        outcome.objective_inr,
+        len(run.outcome.permutation),
+        run.outcome.generations_run,
+        run.outcome.final_multiplier,
+        run.outcome.objective_inr,
+        run.elapsed_s,
     )
 
 
@@ -177,12 +213,30 @@ def hub_of_source(instance: Instance, inbound_routes: tuple[Route, ...]) -> Node
     return hubs
 
 
-def _workloads(
-    instance: Instance, hub_of_stop: NodeArray, config: Config
+def hub_workloads(
+    instance: Instance, hub_of_stop: NodeArray, capacity_kg: float
 ) -> tuple[HubWorkload, ...]:
-    """Group customers by the hub their shipment reached, and refuse an unliftable stop first."""
+    """Group customers by the hub their shipment reached, and refuse an unliftable stop first.
+
+    Public because :mod:`src.stage2.ortools_reference` must group its customers by *this*
+    function rather than a copy of it. A reference that partitioned the hubs even slightly
+    differently would be solving a different problem, and the measured gap would be reporting that
+    difference as solver quality.
+
+    Args:
+        instance: Supplies the customer node space and the mass owed at each.
+        hub_of_stop: Hub id per customer, as induced through each shipment by
+            :func:`~src.workload.hub_of_customer`.
+        capacity_kg: What one vehicle can carry, for the servability refusal.
+
+    Returns:
+        One workload per hub that has anything to deliver, in hub order.
+
+    Raises:
+        InfeasibleInstanceError: If a customer is owed more than one vehicle can carry.
+    """
     _, customer_kg = stage_demands(instance)
-    require_servable(customer_kg, config.fleet.vehicle_capacity_kg, "customer")
+    require_servable(customer_kg, capacity_kg, "customer")
     hub_nodes = node_array(instance.hub_node(hub.hub_id) for hub in instance.hubs)
     customer_nodes = node_array(
         instance.customer_node(customer.customer_id) for customer in instance.customers
@@ -221,7 +275,7 @@ def _hub_task(
     )
 
 
-def _solve_all(tasks: tuple[Stage2Task, ...], workers: int) -> tuple[HubOutcome, ...]:
+def _solve_all(tasks: tuple[Stage2Task, ...], workers: int) -> tuple[HubRun, ...]:
     """Evolve every hub, sequentially or across a spawn pool.
 
     A single hub, or a pool of one, takes the sequential path — the only one whose result a test
@@ -229,6 +283,10 @@ def _solve_all(tasks: tuple[Stage2Task, ...], workers: int) -> tuple[HubOutcome,
     Both paths return results in hub order and both log each hub as it lands; the per-hub seed
     makes the answer independent of which worker picked up which hub, and therefore of the order
     they come back in.
+
+    Note that the *elapsed* figures are not independent of the pool: a hub sharing a machine with
+    fifteen others runs slower than it would alone. That is deliberate and is why the reference is
+    run in the same process — see :class:`HubRun`.
     """
     count = _worker_count(workers)
     if len(tasks) <= 1 or count == 1:
@@ -243,10 +301,10 @@ def _solve_all(tasks: tuple[Stage2Task, ...], workers: int) -> tuple[HubOutcome,
         # imap_unordered rather than map: a result is yielded the moment its hub finishes, so a
         # long run reports progress instead of going silent until the slowest hub returns. Order
         # is restored by hub id afterwards, which is why HubOutcome carries one.
-        for outcome in pool.imap_unordered(solve_hub_ga, tasks):
-            finished.append(outcome)
-            _log_finished(outcome, len(finished), len(tasks))
-    return tuple(sorted(finished, key=lambda outcome: outcome.hub_id))
+        for run in pool.imap_unordered(solve_hub_ga, tasks):
+            finished.append(run)
+            _log_finished(run, len(finished), len(tasks))
+    return tuple(sorted(finished, key=lambda run: run.outcome.hub_id))
 
 
 def _worker_count(workers: int) -> int:
@@ -258,7 +316,7 @@ def _worker_count(workers: int) -> int:
     return workers if workers > 0 else (os.cpu_count() or 1)
 
 
-def solve_hub_ga(task: Stage2Task) -> HubOutcome:
+def solve_hub_ga(task: Stage2Task) -> HubRun:
     """Evolve one hub. The pool worker — module-level and pure, so it pickles.
 
     Rebuilds the hub's context against its *local* node space, where the hub is node 0 and its
@@ -266,11 +324,14 @@ def solve_hub_ga(task: Stage2Task) -> HubOutcome:
     positions into that same order, which is what lets the parent replay it against the
     instance-wide matrices without a translation table.
 
+    The clock wraps ``evolve()`` and nothing else, so the figure excludes both the pool's start-up
+    and this task's own context construction. It is the search's budget, not the worker's.
+
     Args:
         task: This hub's self-contained problem.
 
     Returns:
-        The best chromosome found, priced at the configured rates.
+        The best chromosome found, priced at the configured rates, with its wall clock.
     """
     n_stops = len(task.demand_kg)
     workload = HubWorkload(
@@ -293,4 +354,6 @@ def solve_hub_ga(task: Stage2Task) -> HubOutcome:
         pricing=task.pricing,
         cost_config=task.cost,
     )
-    return evolve(context, task.ga, np.random.default_rng([task.seed, task.hub_id]))
+    started = time.perf_counter()
+    outcome = evolve(context, task.ga, np.random.default_rng([task.seed, task.hub_id]))
+    return HubRun(outcome=outcome, elapsed_s=time.perf_counter() - started)

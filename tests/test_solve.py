@@ -14,6 +14,7 @@ structural check because there is no behavioural one.
 from __future__ import annotations
 
 import dataclasses
+import math
 
 from src.config import Config, GAConfig, GeoConfig, RunConfig, Stage1Config
 from src.costs.matrix import CostMatrices, HaversineProvider
@@ -253,3 +254,59 @@ def test_the_plan_reports_one_outcome_per_hub() -> None:
 def test_the_payload_is_frozen() -> None:
     """Anything shared across hubs must be immutable or passed by value."""
     assert Stage2Task.__dataclass_params__.frozen
+
+
+def test_every_hub_reports_the_wall_clock_its_search_consumed() -> None:
+    """The OR-Tools reference spends this number as its own per-hub budget.
+
+    Asserted as positive-and-finite rather than against a value: the point is that a real figure
+    is recorded for every hub, not how fast this machine happens to be.
+    """
+    config = small_config()
+    instance, matrices, traffic = build(config)
+    inbound = inbound_leg(instance, matrices, traffic, config)
+    customer_hubs = hub_of_customer(instance, hub_of_source(instance, inbound))
+
+    plan = solve_stage2(instance, matrices, traffic, customer_hubs, config)
+
+    assert len(plan.runs) == len(plan.outcomes)
+    assert all(run.elapsed_s > 0.0 for run in plan.runs)
+    assert all(math.isfinite(run.elapsed_s) for run in plan.runs)
+
+
+def test_the_outcomes_property_stays_aligned_with_the_runs_it_reads() -> None:
+    """Callers report on outcomes and only the reference wants timings; the two must not diverge.
+
+    Hub order is the contract — ``solve_stage2`` zips workloads against runs — so an ``outcomes``
+    that reordered or dropped anything would pair a plan with the wrong hub's workload.
+    """
+    config = small_config()
+    instance, matrices, traffic = build(config)
+    inbound = inbound_leg(instance, matrices, traffic, config)
+    customer_hubs = hub_of_customer(instance, hub_of_source(instance, inbound))
+
+    plan = solve_stage2(instance, matrices, traffic, customer_hubs, config)
+
+    assert plan.outcomes == tuple(run.outcome for run in plan.runs)
+    assert [outcome.hub_id for outcome in plan.outcomes] == sorted(
+        outcome.hub_id for outcome in plan.outcomes
+    )
+
+
+def test_two_identical_runs_agree_on_the_search_but_not_on_the_clock() -> None:
+    """Why ``elapsed_s`` is on :class:`HubRun` and not on ``HubOutcome``.
+
+    ``tests/test_ga.py`` compares whole outcomes for equality, which is only sound while an
+    outcome holds nothing that varies between runs of the same search. This pins both halves: the
+    search repeats exactly, and the timing is kept somewhere that equality does not reach.
+    """
+    config = small_config()
+    instance, matrices, traffic = build(config)
+    inbound = inbound_leg(instance, matrices, traffic, config)
+    customer_hubs = hub_of_customer(instance, hub_of_source(instance, inbound))
+
+    first = solve_stage2(instance, matrices, traffic, customer_hubs, config)
+    second = solve_stage2(instance, matrices, traffic, customer_hubs, config)
+
+    assert first.outcomes == second.outcomes, "the same seed must search identically"
+    assert first.routes == second.routes
