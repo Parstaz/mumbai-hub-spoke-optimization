@@ -16,9 +16,7 @@ in the direction that flatters the treatment.
 
 from __future__ import annotations
 
-import ast
 import itertools
-import pathlib
 
 import numpy as np
 import pytest
@@ -31,8 +29,7 @@ from src.stage1.assignment import (
 )
 from src.units import DistanceMatrix, NodeArray
 from src.workload import nearest_hub, node_array
-
-SRC_ROOT = pathlib.Path(__file__).resolve().parent.parent / "src"
+from tests.closure import SRC_ROOT, reachable_modules
 
 TREATMENT_PACKAGES = ("src.stage1", "src.stage2")
 """The modules being optimized. The control must not reach into either."""
@@ -207,29 +204,6 @@ def test_max_stops_per_hub_rounds_the_even_share_up(
     assert max_stops_per_hub(n_stops, n_hubs, slack) == expected
 
 
-def imports_of(path: pathlib.Path) -> set[str]:
-    """Every module name ``path`` imports, as written."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            names.add(node.module)
-    return names
-
-
-def module_path(module: str) -> pathlib.Path | None:
-    """Resolve a ``src.`` module name to its file, or ``None`` if it is not ours."""
-    if not module.startswith("src."):
-        return None
-    relative = pathlib.Path(*module.split(".")[1:])
-    for candidate in (SRC_ROOT / f"{relative}.py", SRC_ROOT / relative / "__init__.py"):
-        if candidate.exists():
-            return candidate
-    return None
-
-
 def test_nothing_the_baseline_depends_on_imports_the_optimized_stages() -> None:
     """The control must be independently frozen — transitively, not just at the top level.
 
@@ -238,20 +212,7 @@ def test_nothing_the_baseline_depends_on_imports_the_optimized_stages() -> None:
     not to ``greedy.py`` where it would be obvious. If this fails, the baseline column can be
     moved by editing the module it is supposed to be measuring.
     """
-    frontier = [SRC_ROOT / "baseline" / "greedy.py"]
-    seen: set[pathlib.Path] = set()
-    reached: set[str] = set()
-    while frontier:
-        path = frontier.pop()
-        if path in seen:
-            continue
-        seen.add(path)
-        for module in imports_of(path):
-            if module.startswith("src."):
-                reached.add(module)
-            resolved = module_path(module)
-            if resolved is not None:
-                frontier.append(resolved)
+    reached = reachable_modules((SRC_ROOT / "baseline" / "greedy.py",))
 
     offenders = sorted(m for m in reached if m.startswith(TREATMENT_PACKAGES))
     assert not offenders, (

@@ -414,6 +414,35 @@ class GAConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ReferenceConfig:
+    """Settings for the Stage 2 OR-Tools quality reference.
+
+    **There is deliberately no time-limit field here.** The reference exists to measure the gap
+    against the hand-written GA on identical input, which includes an identical search budget, and
+    that budget is not a configurable quantity: it is the wall clock the GA's own search consumed
+    on each hub, read off :class:`~src.stage2.solve.HubRun`. A configured limit would be a second,
+    silent knob on the one number step 8 exists to report — set it 10% high and the reference wins,
+    10% low and the GA does.
+
+    For the same reason there is no floor. A hub whose GA stopped after three seconds gives the
+    reference three seconds, and if that buys no plan then that is the measurement (see
+    :mod:`src.stage2.ortools_reference`).
+
+    ``solution_limit`` is a reproducibility control, not a quality one, and carries exactly the
+    meaning it does in :class:`Stage1Config`: guided local search under a wall-clock limit returns
+    whatever it had reached when the clock ran out, so the same hub on a busier machine yields a
+    different plan. Setting this to 1 stops at the first-solution heuristic, which is deterministic
+    and independent of the time limit; the test suite runs that way. Zero means unlimited, and is
+    what a real measurement uses — the reference is supposed to search as hard as its budget allows.
+    """
+
+    solution_limit: int = 0
+
+    def __post_init__(self) -> None:
+        _require(self.solution_limit >= 0, "solution_limit must be >= 0 (0 means unlimited)")
+
+
+@dataclass(frozen=True, slots=True)
 class RunConfig:
     """Per-run execution settings: seed, distance provider, cache location.
 
@@ -478,4 +507,5 @@ class Config:
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     stage1: Stage1Config = field(default_factory=Stage1Config)
     ga: GAConfig = field(default_factory=GAConfig)
+    reference: ReferenceConfig = field(default_factory=ReferenceConfig)
     run: RunConfig = field(default_factory=RunConfig)
