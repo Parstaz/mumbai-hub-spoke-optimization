@@ -11,17 +11,12 @@ the full 1116×1116 matrices, the ``Config``, the ``Instance`` or a random ``Gen
 what makes the pool correct rather than merely fast: there is no shared mutable state to be raced
 over, and reproducibility does not depend on how the work was divided.
 
-**OR-Tools optimises a static proxy; the reported cost is the real thing.** Arc costs in a
-``RoutingModel`` are fixed before the search starts, so the cumulative traffic model — which
-depends on when a leg is actually driven — cannot live inside it. The proxy is the monetised arc:
-
-    ``alpha × km  +  beta × hours × m(dispatch_hour)``
-
-with the fixed vehicle charge ``gamma`` attached to each vehicle, so the search minimises the same
-four-component objective :mod:`src.scoring` reports rather than a distance or duration surrogate.
-Note that duration *alone* would make the traffic multiplier a no-op: a single scalar multiple of
-the duration matrix has exactly the same ``argmin``. The multiplier only changes a decision when
-it is traded against ``₹/km``, which is why the arc cost is money and not time.
+**OR-Tools optimises a static proxy; the reported cost is the real thing.** The arc is the
+monetised one :mod:`src.arc_model` owns — ``alpha × km + beta × hours × m(dispatch_hour)``, with
+the fixed vehicle charge ``gamma`` per vehicle — so the search minimises the same four-component
+objective :mod:`src.scoring` reports rather than a distance or duration surrogate. That module
+holds the argument for why the arc is money rather than time, and it lives there rather than here
+because the Stage 2 reference prices its arcs the same way.
 
 Once an ordering comes back, the ``Route`` is built by :func:`src.tour.build_route` from the
 **global** matrices and the real :class:`~src.costs.traffic.TrafficModel`, so every distance,
@@ -39,20 +34,27 @@ reports a spread rather than a single number.
 from __future__ import annotations
 
 import logging
-import math
 import multiprocessing
 import os
 from dataclasses import dataclass
 
 import numpy as np
-import numpy.typing as npt
-from ortools.constraint_solver import pywrapcp, routing_enums_pb2
+from ortools.constraint_solver import pywrapcp
 
+from src.arc_model import (
+    DEPOT,
+    ArcRates,
+    VisitOrders,
+    arc_cost_milli_inr,
+    arc_rates,
+    capacity_grams,
+    demand_grams,
+    search_parameters,
+    vehicle_count,
+    visit_orders,
+)
 from src.config import (
-    CAPACITY_TOLERANCE_KG,
     COST_SCALE_MILLI_INR,
-    GRAMS_PER_KG,
-    METRES_PER_KM,
     SECONDS_PER_HOUR,
     Config,
     FleetConfig,
@@ -76,30 +78,7 @@ from src.workload import (
 
 logger = logging.getLogger(__name__)
 
-VisitOrders = tuple[tuple[int, ...], ...]
-"""One tuple of stop positions per deployed vehicle, indexing into ``HubWorkload.nodes``."""
-
-_DEPOT = 0
-"""Local node index of the hub in a per-hub model. Stops occupy 1..k."""
-
 _CAPACITY_DIMENSION = "Capacity"
-
-_MILLISECONDS_PER_SECOND = 1000
-
-
-@dataclass(frozen=True, slots=True)
-class ArcRates:
-    """The cost model as OR-Tools sees it: money per arc, plus money per vehicle.
-
-    ``traffic_multiplier`` is the static stand-in for the cumulative model — see the module
-    docstring for why a static multiplier is the only kind an arc cost can carry, and why it
-    still changes the answer once distance and time are priced against each other.
-    """
-
-    variable_per_km: float
-    driver_per_hour: float
-    fixed_per_vehicle: float
-    traffic_multiplier: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,7 +130,7 @@ def solve_stage1(
             cap cannot absorb every source, or if a hub's model admits no solution.
     """
     workloads = _assign(instance, matrices, strategy, config.stage1)
-    rates = _arc_rates(instance, traffic, config)
+    rates = arc_rates(config.cost, traffic, instance.schedule.dispatch_hour)
     tasks = tuple(
         _hub_task(workload, matrices, rates, instance.fleet, config.stage1)
         for workload in workloads
@@ -204,16 +183,6 @@ def _assign(
     return group_by_hub(hub_nodes, hub_of_stop, stop_nodes, source_demand_kg[active])
 
 
-def _arc_rates(instance: Instance, traffic: TrafficModel, config: Config) -> ArcRates:
-    """Bundle the cost rates with the traffic multiplier in force at dispatch."""
-    return ArcRates(
-        variable_per_km=config.cost.variable_per_km,
-        driver_per_hour=config.cost.driver_per_hour,
-        fixed_per_vehicle=config.cost.fixed_per_vehicle,
-        traffic_multiplier=traffic.multiplier_for_hour(int(instance.schedule.dispatch_hour)),
-    )
-
-
 def _hub_task(
     workload: HubWorkload,
     matrices: CostMatrices,
@@ -232,29 +201,13 @@ def _hub_task(
         hub_id=workload.hub_id,
         local_distance_m=matrices.distance_m[block],
         local_duration_s=matrices.duration_s[block],
-        demand_g=(0, *(round(kg * GRAMS_PER_KG) for kg in workload.demand_kg)),
-        capacity_g=round(fleet.vehicle_capacity_kg * GRAMS_PER_KG),
-        n_vehicles=_vehicle_count(workload, fleet),
+        demand_g=demand_grams(workload.demand_kg),
+        capacity_g=capacity_grams(fleet.vehicle_capacity_kg),
+        n_vehicles=vehicle_count(float(workload.demand_kg.sum()), fleet),
         rates=rates,
         time_limit_s=stage1.cvrp_time_limit_s,
         solution_limit=stage1.cvrp_solution_limit,
     )
-
-
-def _vehicle_count(workload: HubWorkload, fleet: FleetConfig) -> int:
-    """Vehicles to offer this hub: its mass floor, times the configured slack, rounded up.
-
-    The floor is subtracted by the capacity tolerance before dividing, because a load summed in
-    floating point can land a fraction of a microgram over an exact multiple of capacity and
-    would otherwise buy a whole extra vehicle for no mass at all.
-
-    Offering more vehicles than needed is safe and deliberate: unused ones stay at the depot and
-    are dropped, and the fixed charge attached to each vehicle means the search prefers not to
-    deploy them. Offering too few would make a solvable hub infeasible.
-    """
-    total_kg = float(workload.demand_kg.sum())
-    floor = math.ceil((total_kg - CAPACITY_TOLERANCE_KG) / fleet.vehicle_capacity_kg)
-    return max(1, math.ceil(floor * fleet.vehicle_slack_factor))
 
 
 def _solve_all(tasks: tuple[HubTask, ...], workers: int) -> tuple[VisitOrders, ...]:
@@ -303,9 +256,9 @@ def solve_hub_cvrp(task: HubTask) -> VisitOrders:
             from the hub's own mass floor and every stop known to fit one vehicle, this means a
             bug in the model rather than a hard instance.
     """
-    manager = pywrapcp.RoutingIndexManager(len(task.demand_g), task.n_vehicles, _DEPOT)
+    manager = pywrapcp.RoutingIndexManager(len(task.demand_g), task.n_vehicles, DEPOT)
     routing = pywrapcp.RoutingModel(manager)
-    arc_cost = _arc_cost_milli_inr(task)
+    arc_cost = arc_cost_milli_inr(task.local_distance_m, task.local_duration_s, task.rates)
 
     def transit(from_index: int, to_index: int) -> int:
         return int(arc_cost[manager.IndexToNode(from_index), manager.IndexToNode(to_index)])
@@ -323,72 +276,12 @@ def solve_hub_cvrp(task: HubTask) -> VisitOrders:
         _CAPACITY_DIMENSION,
     )
 
-    assignment = routing.SolveWithParameters(_search_parameters(task))
+    assignment = routing.SolveWithParameters(
+        search_parameters(task.time_limit_s, task.solution_limit)
+    )
     if assignment is None:
         raise InfeasibleInstanceError(
             f"OR-Tools found no inbound plan for hub {task.hub_id}: "
             f"{len(task.demand_g) - 1} stops, {task.n_vehicles} vehicles of {task.capacity_g} g"
         )
-    return _visit_orders(routing, manager, assignment, task.n_vehicles)
-
-
-def _arc_cost_milli_inr(task: HubTask) -> npt.NDArray[np.int64]:
-    """Price every arc of one hub's block in integer milli-rupees.
-
-    Vectorised over the whole block rather than evaluated inside the transit callback: OR-Tools
-    calls that callback tens of thousands of times per solve, and the arithmetic is identical for
-    every call.
-    """
-    rates = task.rates
-    inr = (
-        rates.variable_per_km * task.local_distance_m / METRES_PER_KM
-        + rates.driver_per_hour
-        * rates.traffic_multiplier
-        * task.local_duration_s
-        / SECONDS_PER_HOUR
-    )
-    scaled: npt.NDArray[np.int64] = np.rint(inr * COST_SCALE_MILLI_INR).astype(np.int64)
-    return scaled
-
-
-def _search_parameters(task: HubTask) -> pywrapcp.DefaultRoutingSearchParameters:
-    """First solution by cheapest arc, then guided local search under the configured limits.
-
-    ``solution_limit`` of 1 returns the first-solution result and is independent of the time
-    limit, which is what makes a seeded test reproducible. Zero means unlimited and is left
-    unset, because OR-Tools treats the field's own default as no limit.
-    """
-    parameters = pywrapcp.DefaultRoutingSearchParameters()
-    parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    parameters.local_search_metaheuristic = (
-        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    )
-    parameters.time_limit.FromMilliseconds(int(task.time_limit_s * _MILLISECONDS_PER_SECOND))
-    if task.solution_limit > 0:
-        parameters.solution_limit = task.solution_limit
-    parameters.log_search = False
-    return parameters
-
-
-def _visit_orders(
-    routing: pywrapcp.RoutingModel,
-    manager: pywrapcp.RoutingIndexManager,
-    assignment: pywrapcp.Assignment,
-    n_vehicles: int,
-) -> VisitOrders:
-    """Read each vehicle's tour out of the solved model as stop positions.
-
-    Walked from the node *after* the start depot, so the returned positions index
-    ``HubWorkload.nodes`` directly and a vehicle that never left reads as an empty walk. Local
-    node ``i`` is stop ``i - 1``, since the hub occupies local index 0.
-    """
-    orders: list[tuple[int, ...]] = []
-    for vehicle in range(n_vehicles):
-        index = assignment.Value(routing.NextVar(routing.Start(vehicle)))
-        order: list[int] = []
-        while not routing.IsEnd(index):
-            order.append(int(manager.IndexToNode(index)) - 1)
-            index = assignment.Value(routing.NextVar(index))
-        if order:
-            orders.append(tuple(order))
-    return tuple(orders)
+    return visit_orders(routing, manager, assignment, task.n_vehicles)
