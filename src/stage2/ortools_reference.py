@@ -226,11 +226,24 @@ class HubReference:
     elapsed_s: float
     vehicles_offered: int
     stops: int
+    solution_limit: int
+    """Carried so the report can say the budget was not what actually stopped the search.
+
+    Under ``--deterministic`` this is 1 and the solve returns its first-solution heuristic
+    immediately, spending almost none of the matched budget. The resulting gap is then not a
+    matched-budget measurement at all, and a table that did not say so would be the most
+    misleading output this module could produce.
+    """
 
     @property
     def solved(self) -> bool:
         """Whether this hub has a plan at all."""
         return self.orders is not None
+
+    @property
+    def first_solution_only(self) -> bool:
+        """Whether the search was stopped at its first solution rather than by the clock."""
+        return self.solution_limit == 1
 
     @property
     def vehicles_deployed(self) -> int:
@@ -458,6 +471,7 @@ def solve_hub_reference(task: ReferenceTask) -> HubReference:
         elapsed_s=elapsed_s,
         vehicles_offered=task.n_vehicles,
         stops=len(task.demand_g) - 1,
+        solution_limit=task.solution_limit,
     )
 
 

@@ -34,8 +34,8 @@ from collections.abc import Callable, Sequence
 
 from src.baseline.greedy import solve_baseline
 from src.cli.ablation import Arm, Priced, Problem, inbound_leg, priced, probe_arms, solve_arms
+from src.cli.format import delta, generations_used
 from src.cli.run_baseline import context_lines
-from src.cli.run_pipeline import delta, generations_used
 from src.cli.run_stage1 import STRATEGIES
 from src.config import Config, CostConfig, GAConfig, RunConfig, Stage1Config
 from src.costs.matrix import build_matrices

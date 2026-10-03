@@ -12,11 +12,10 @@ import dataclasses
 
 import pytest
 
+from src.cli.format import delta, generations_used
 from src.cli.run_pipeline import (
     budget_lines,
     comparison_lines,
-    delta,
-    generations_used,
     main,
     solve_pipeline,
 )
@@ -115,7 +114,8 @@ def test_the_budget_line_reports_what_was_used_not_what_was_configured() -> None
     ).matrix(instance.coordinates())
     matrices = CostMatrices(distance_m=distance_m, duration_s=duration_s)
     traffic = TrafficModel.from_config(SMALL.traffic)
-    _, hubs = solve_pipeline(instance, matrices, traffic, unconstrained, SMALL)
+    _, plan = solve_pipeline(instance, matrices, traffic, unconstrained, SMALL)
+    hubs = plan.outcomes
 
     lines = budget_lines(hubs, SMALL.ga)
     assert f"of {SMALL.ga.generations} budget" in lines[0]

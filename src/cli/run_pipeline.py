@@ -23,14 +23,24 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
 
 from src.baseline.greedy import solve_baseline
+from src.cli.ablation import Problem
+from src.cli.format import delta, generations_used
+from src.cli.reference import report_lines
 from src.cli.run_baseline import context_lines
 from src.cli.run_stage1 import STRATEGIES
-from src.config import Config, CostConfig, GAConfig, RunConfig, Stage1Config
+from src.config import (
+    Config,
+    CostConfig,
+    GAConfig,
+    ReferenceConfig,
+    RunConfig,
+    Stage1Config,
+)
 from src.costs.matrix import CostMatrices, build_matrices
 from src.costs.traffic import TrafficModel
 from src.data.generate import generate_instance
@@ -40,7 +50,8 @@ from src.solution import Solution
 from src.stage1.assignment import AssignmentStrategy
 from src.stage1.cvrp import solve_stage1
 from src.stage2.ga import HubOutcome
-from src.stage2.solve import hub_of_source, solve_stage2
+from src.stage2.ortools_reference import matched_run, solve_reference
+from src.stage2.solve import Stage2Plan, hub_of_source, solve_stage2
 from src.workload import hub_of_customer
 
 logger = logging.getLogger(__name__)
@@ -89,6 +100,12 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         action="store_true",
         help="stop Stage 1 at the first-solution heuristic, making the inbound leg reproducible",
     )
+    parser.add_argument(
+        "--reference",
+        action="store_true",
+        help="after the pipeline, re-solve Stage 2 with OR-Tools under the GA's own per-hub wall "
+        "clock and report the gap; step 8's quality benchmark, never part of the pipeline",
+    )
     return parser.parse_args(argv)
 
 
@@ -106,6 +123,10 @@ def _config(args: argparse.Namespace) -> Config:
             local_search_pct=0.0 if args.no_local_search else defaults.local_search_pct,
             trace_generations=args.trace_generations,
         ),
+        # --deterministic reaches the reference for the same reason it reaches Stage 1: guided
+        # local search under a wall clock is not reproducible, and a run asking for repeatability
+        # has to get it from both OR-Tools models or from neither.
+        reference=ReferenceConfig(solution_limit=1 if args.deterministic else 0),
     )
 
 
@@ -115,7 +136,7 @@ def solve_pipeline(
     traffic: TrafficModel,
     strategy: AssignmentStrategy,
     config: Config,
-) -> tuple[Solution, tuple[HubOutcome, ...]]:
+) -> tuple[Solution, Stage2Plan]:
     """Solve both legs in order and compose them into one plan.
 
     The composition is the whole point and is one line: Stage 2 delivers from the hub each
@@ -123,53 +144,16 @@ def solve_pipeline(
     greedy decomposition the README lists as a known limitation — the assignment optimal for the
     inbound leg need not be optimal for the outbound one — and it is displayed here rather than
     dodged.
+
+    The whole :class:`~src.stage2.solve.Stage2Plan` is returned rather than just its outcomes
+    because ``--reference`` needs the per-hub wall clocks of **this** run. Re-solving Stage 2 to
+    recover them would match the reference's budget to a different search than the one whose
+    routes it is compared against, and would double the runtime on the largest hub.
     """
     inbound = solve_stage1(instance, matrices, traffic, strategy, config)
     customer_hubs = hub_of_customer(instance, hub_of_source(instance, inbound))
     outbound = solve_stage2(instance, matrices, traffic, customer_hubs, config)
-    return Solution(stage1_routes=inbound, stage2_routes=outbound.routes), outbound.outcomes
-
-
-@dataclass(frozen=True, slots=True)
-class GenerationsUsed:
-    """How much of the generation budget a run's hubs actually spent.
-
-    Separated from its rendering because two entry points need the same figures in different
-    shapes: this one prints a two-line block for a single run, the step 7 ablation prints one line
-    per arm. Computing it twice would be two chances to disagree about what "used" means.
-    """
-
-    median: int
-    lowest: int
-    highest: int
-    stopped_early: int
-    hubs: int
-
-
-def generations_used(hubs: tuple[HubOutcome, ...], ga: GAConfig) -> GenerationsUsed | None:
-    """Summarise the generations each hub ran, or ``None`` when no hub ran at all.
-
-    ``None`` rather than a zeroed summary: an instance with nothing to deliver has no budget
-    story to tell, and a caller that rendered "median 0 of 600" would be describing a search that
-    never started.
-
-    Args:
-        hubs: Every hub's outcome, in any order.
-        ga: The configuration the run was launched with, for the budget and the stagnation limit.
-
-    Returns:
-        The median, range and early-stop count across hubs, or ``None`` if ``hubs`` is empty.
-    """
-    if not hubs:
-        return None
-    used = sorted(outcome.generations_run for outcome in hubs)
-    return GenerationsUsed(
-        median=used[len(used) // 2],
-        lowest=used[0],
-        highest=used[-1],
-        stopped_early=sum(1 for value in used if value < ga.generations),
-        hubs=len(used),
-    )
+    return Solution(stage1_routes=inbound, stage2_routes=outbound.routes), outbound
 
 
 def budget_lines(hubs: tuple[HubOutcome, ...], ga: GAConfig) -> list[str]:
@@ -247,18 +231,6 @@ def comparison_lines(baseline: Metrics, optimized: Metrics, cost: CostConfig) ->
     return lines
 
 
-def delta(before: float, after: float) -> str:
-    """Percentage change, signed so an improvement reads negative.
-
-    Public because the step 7 ablation prints the same column against the same benchmark. A second
-    formatter would be free to disagree about the sign convention, which is the one thing about
-    this function a reader has to be able to trust without checking.
-    """
-    if before == 0.0:
-        return "—"
-    return f"{(after - before) / before:+.1%}"
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     """Solve both legs, score them against the baseline, and print the table."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -271,7 +243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     baseline = evaluate_solution(solve_baseline(instance, matrices, traffic), instance, config.cost)
     started = time.perf_counter()
-    solution, hubs = solve_pipeline(instance, matrices, traffic, STRATEGIES[args.strategy], config)
+    solution, plan = solve_pipeline(instance, matrices, traffic, STRATEGIES[args.strategy], config)
     elapsed_s = time.perf_counter() - started
     optimized = evaluate_solution(solution, instance, config.cost)
 
@@ -284,13 +256,58 @@ def main(argv: Sequence[str] | None = None) -> int:
         f", population {config.ga.population_size}, generation budget {config.ga.generations}"
         f"{'' if config.ga.local_search_pct else ', no local search'}"
     )
-    for line in budget_lines(hubs, config.ga):
+    for line in budget_lines(plan.outcomes, config.ga):
         print(f"  {line}")
     print(f"  {'solve time':<{_LABEL_WIDTH}}{elapsed_s:,.1f} s\n")
     for line in comparison_lines(baseline, optimized, config.cost):
         print(f"  {line}")
     print()
+
+    if args.reference:
+        _print_reference(
+            Problem(instance=instance, matrices=matrices, traffic=traffic),
+            solution,
+            plan,
+            config,
+        )
     return 0
+
+
+def _print_reference(
+    problem: Problem, solution: Solution, plan: Stage2Plan, config: Config
+) -> None:
+    """Re-solve the final mile with OR-Tools under the GA's budgets, and report the gap.
+
+    Called from :func:`main` and never from :func:`solve_pipeline` — §1.1 keeps the reference
+    outside the pipeline, and ``tests/test_closure.py`` proves the solve path cannot reach it. The
+    main table is already printed and flushed by the time this starts, so a long reference solve
+    does not withhold the result a reader came for.
+
+    ``plan`` is the Stage 2 result whose routes are in the table above, so the budgets handed over
+    are the clocks that produced *those* tours. The mapping is read back off the inbound tours the
+    GA actually delivered from, the same direction :func:`~src.cli.ablation.inbound_leg` composes
+    it, so both solvers serve each customer from the hub its own parcel reached.
+    """
+    sys.stdout.flush()
+    instance = problem.instance
+    customer_hubs = hub_of_customer(instance, hub_of_source(instance, solution.stage1_routes))
+    started = time.perf_counter()
+    reference = solve_reference(
+        instance,
+        problem.matrices,
+        problem.traffic,
+        matched_run(customer_hubs, plan.runs),
+        config,
+    )
+    elapsed_s = time.perf_counter() - started
+
+    print("\n  Stage 2 genetic algorithm against an OR-Tools reference, matched budget per hub.")
+    print("  Both columns are scored by evaluate_solution over the same inbound plan.\n")
+    print(f"  {'reference solve time':<{_LABEL_WIDTH}}{elapsed_s:,.1f} s\n")
+    for line in report_lines(
+        instance, solution.stage1_routes, solution.stage2_routes, reference, config.cost
+    ):
+        print(f"  {line}" if line else "")
 
 
 if __name__ == "__main__":

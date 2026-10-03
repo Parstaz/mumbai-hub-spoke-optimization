@@ -497,6 +497,7 @@ def test_an_incomplete_reference_plan_is_not_complete_and_cannot_be_scored() -> 
                 elapsed_s=0.5,
                 vehicles_offered=1,
                 stops=1,
+                solution_limit=0,
             ),
             HubReference(
                 hub_id=1,
@@ -506,6 +507,7 @@ def test_an_incomplete_reference_plan_is_not_complete_and_cannot_be_scored() -> 
                 elapsed_s=0.001,
                 vehicles_offered=2,
                 stops=5,
+                solution_limit=0,
             ),
         ),
         routes=(),
