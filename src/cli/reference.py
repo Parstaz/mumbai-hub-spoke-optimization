@@ -272,10 +272,12 @@ def _truncation_lines(plan: ReferencePlan) -> list[str]:
     ceilings = [hub for hub in plan.hubs if hub.at_fleet_ceiling]
     lines = [
         "",
-        f"{len(truncated)} of {len(plan.hubs)} hubs were still improving when the budget stopped",
-        "them, so the reference's column is a lower bound on what it would reach given longer —",
-        "which makes the gap an upper bound on the GA's advantage, or a lower bound on its",
-        "deficit.",
+        f"{len(truncated)} of {len(plan.hubs)} hubs were stopped by the budget rather than by",
+        "their own search — they spent the whole matched clock, or reported a descent still in",
+        "progress. ROUTING_SUCCESS does not contradict that: it means a local optimum was held",
+        "when the clock stopped, and guided local search leaves local optima routinely.",
+        "So the reference's column is a lower bound on what it would reach given longer, which",
+        "makes the gap an upper bound on the GA's advantage, or a lower bound on its deficit.",
     ]
     if ceilings:
         named = ", ".join(str(hub.hub_id) for hub in ceilings)

@@ -90,7 +90,19 @@ _TIME_DIMENSION = "Time"
 _Status = routing_enums_pb2.RoutingSearchStatus
 
 _TRUNCATED_STATUSES = frozenset({_Status.ROUTING_PARTIAL_SUCCESS_LOCAL_OPTIMUM_NOT_REACHED})
-"""Statuses meaning "a plan, but the search was still improving when the clock stopped it"."""
+"""Statuses meaning "a plan, but the search was still mid-descent when the clock stopped it".
+
+Necessary but **not sufficient** for detecting budget truncation — see
+:attr:`HubReference.clock_stopped`.
+"""
+
+_CLOCK_TOLERANCE_S = 0.5
+"""Slack when deciding a solve spent its whole budget.
+
+OR-Tools honours a time limit to within scheduling noise, so an exact equality test would read a
+clock-stopped hub as having finished early. Half a second against budgets of 10 s and up is two
+orders of magnitude below the quantity being judged.
+"""
 
 _BROKEN_MODEL_STATUSES = frozenset({_Status.ROUTING_INVALID, _Status.ROUTING_INFEASIBLE})
 """Statuses that are a *proof* the model is wrong — a bug here, never a budget outcome.
@@ -256,9 +268,32 @@ class HubReference:
         return self.solved and self.vehicles_deployed >= self.vehicles_offered
 
     @property
+    def clock_stopped(self) -> bool:
+        """Whether the budget, rather than the search itself, ended this solve.
+
+        Measured on the clock and not on the status, because the status does not say this. On seed
+        42 all 16 hubs returned ``ROUTING_SUCCESS`` while 13 of them had spent their budget to the
+        tenth of a second: ``ROUTING_SUCCESS`` means the solver *holds a solution at a local
+        optimum*, not that it had finished. Guided local search escapes local optima repeatedly, so
+        sitting at one when the clock stops says nothing about whether more time would have helped.
+
+        Keying the caveat on :data:`_TRUNCATED_STATUSES` alone therefore under-reports: it stayed
+        silent on a run where 81% of hubs were cut off. CLAUDE.md §8.6 records the same mistake
+        made the other way round for the GA's arms, and the rule it leaves is the one applied here
+        — a truncation claim is made from what the run measured, never from what a status name
+        suggests.
+        """
+        return self.solved and self.elapsed_s >= self.budget_s - _CLOCK_TOLERANCE_S
+
+    @property
     def budget_truncated(self) -> bool:
-        """Whether a plan was returned while the search was still improving."""
-        return self.solved and self.status in _TRUNCATED_STATUSES
+        """Whether the budget ended this solve, by either signal.
+
+        Either the solver said so (``PARTIAL_SUCCESS``: stopped mid-descent) or the clock shows it
+        (:attr:`clock_stopped`). Both mean the reference's column is a lower bound on what it would
+        reach given longer.
+        """
+        return self.solved and (self.status in _TRUNCATED_STATUSES or self.clock_stopped)
 
 
 @dataclass(frozen=True, slots=True)

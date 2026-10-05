@@ -46,23 +46,28 @@ quietly reporting a partial column as though it were a result.
 def hub(
     hub_id: int = 0,
     *,
-    solved: bool = True,
-    status: int = _SUCCESS,
+    outcome: tuple[bool, int] = (True, _SUCCESS),
     fleet: tuple[int, int] = (3, 2),
+    clock: tuple[float, float] = (6.0, 12.0),
     solution_limit: int = 0,
 ) -> HubReference:
     """One hub's reference result, shaped by what the test is about.
 
-    ``fleet`` pairs vehicles offered with vehicles deployed because only their *relation* matters
-    to anything here — equal means the hub sat at its ceiling — and they are never varied apart.
+    Three pairs, each held together because only the *relation* inside it matters here and neither
+    half is ever varied alone: ``outcome`` is whether a plan came back and the status that explains
+    it, ``fleet`` is vehicles offered against deployed (equal means the hub sat at its ceiling), and
+    ``clock`` is elapsed against budget (equal means the budget stopped it). The default clock
+    finishes well inside its budget, so a test must opt in to truncation.
     """
+    solved, status = outcome
     offered, deployed = fleet
+    elapsed_s, budget_s = clock
     return HubReference(
         hub_id=hub_id,
         orders=tuple((position,) for position in range(deployed)) if solved else None,
         status=status,
-        budget_s=12.0,
-        elapsed_s=11.5,
+        budget_s=budget_s,
+        elapsed_s=elapsed_s,
         vehicles_offered=offered,
         stops=20,
         solution_limit=solution_limit,
@@ -103,7 +108,7 @@ def comparison(ga: float, reference: float) -> Comparison:
 
 def test_an_incomplete_plan_yields_no_scored_comparison() -> None:
     """The load-bearing branch: a plan missing a hub has no honest cost per drop."""
-    plan = ReferencePlan(hubs=(hub(0), hub(1, solved=False, status=_TIMEOUT)), routes=())
+    plan = ReferencePlan(hubs=(hub(0), hub(1, outcome=(False, _TIMEOUT))), routes=())
 
     assert not plan.complete
     assert compare(_UNUSED_INSTANCE, (), (), plan, CostConfig()) is None
@@ -115,7 +120,7 @@ def test_an_incomplete_plan_yields_no_scored_comparison() -> None:
 
 def test_an_unsolved_hub_is_named_and_the_refusal_to_substitute_is_stated() -> None:
     """A dropped hub must be visible, and the report must say nothing was put in its place."""
-    plan = ReferencePlan(hubs=(hub(0), hub(7, solved=False, status=_TIMEOUT)), routes=())
+    plan = ReferencePlan(hubs=(hub(0), hub(7, outcome=(False, _TIMEOUT))), routes=())
 
     text = "\n".join(status_lines(plan))
 
@@ -159,17 +164,44 @@ def test_a_tie_is_reported_as_a_tie_rather_than_a_zero_percent_win() -> None:
 
 def test_hubs_cut_off_mid_descent_make_the_gap_a_bound_and_say_so() -> None:
     """The mirror of the ablation's truncation caveat, in the reference's direction."""
-    plan = ReferencePlan(hubs=(hub(0, status=_TRUNCATED), hub(1)), routes=())
+    plan = ReferencePlan(hubs=(hub(0, outcome=(True, _TRUNCATED)), hub(1)), routes=())
 
     text = "\n".join(status_lines(plan))
 
-    assert "1 of 2 hubs were still improving" in text
+    assert "1 of 2 hubs were stopped by the budget" in text
     assert "upper bound on the GA's advantage" in text
+
+
+def test_a_hub_that_spent_its_whole_budget_counts_as_truncated_despite_reporting_success() -> None:
+    """Regression for the caveat that stayed silent on the run that needed it.
+
+    Seed 42's real shape: every hub returned ``ROUTING_SUCCESS`` while 13 of 16 had spent their
+    budget to the tenth of a second. Keying truncation on the status alone reported no caveat at
+    all on a run where 81% of hubs were cut off by the clock.
+    """
+    spent = hub(0, clock=(12.0, 12.0))
+    early = hub(1, clock=(6.0, 12.0))
+
+    assert spent.clock_stopped
+    assert spent.budget_truncated
+    assert not early.clock_stopped
+    assert not early.budget_truncated
+    assert "1 of 2 hubs were stopped by the budget" in "\n".join(
+        status_lines(ReferencePlan(hubs=(spent, early), routes=()))
+    )
+
+
+def test_an_unsolved_hub_is_never_counted_as_truncated() -> None:
+    """No plan is a different finding from a cut-off plan, and must not be folded into it."""
+    starved = hub(0, outcome=(False, _TIMEOUT), clock=(12.0, 12.0))
+
+    assert not starved.clock_stopped
+    assert not starved.budget_truncated
 
 
 def test_a_hub_at_its_fleet_ceiling_is_flagged_as_possibly_constrained() -> None:
     """Deploying every vehicle offered means the cap, not the search, may have set the answer."""
-    plan = ReferencePlan(hubs=(hub(0, status=_TRUNCATED, fleet=(2, 2)),), routes=())
+    plan = ReferencePlan(hubs=(hub(0, outcome=(True, _TRUNCATED), fleet=(2, 2)),), routes=())
 
     text = "\n".join(status_lines(plan))
 
@@ -212,7 +244,7 @@ def test_the_budget_block_reports_both_the_per_hub_spread_and_the_totals() -> No
 
 def test_the_report_degrades_to_status_and_caveats_when_there_is_nothing_to_score() -> None:
     """End to end on the branch a real run may never take: no table, no headline, no gap."""
-    plan = ReferencePlan(hubs=(hub(0, solved=False, status=_TIMEOUT),), routes=())
+    plan = ReferencePlan(hubs=(hub(0, outcome=(False, _TIMEOUT)),), routes=())
 
     text = "\n".join(report_lines(_UNUSED_INSTANCE, (), (), plan, CostConfig()))
 
