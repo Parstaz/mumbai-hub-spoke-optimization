@@ -10,12 +10,13 @@ Python 3.11+, `mypy --strict`, 99% line coverage on the solver, cost and baselin
 (`make cov`), property-based tests on the GA operators and the split procedure. `make test` is the
 gate: `ruff` + `mypy --strict` + `pytest`, and no test touches the network.
 
-> **Status: steps 1–7 of 9 are built.** Both stages solve end to end on one seed
-> (`make run`), and step 7's ablation is reported below. **Step 8** (an OR-Tools reference solve for
-> Stage 2, to measure the hand-written GA's optimality gap) and **step 9** (multi-seed evaluation
-> with per-seed spreads) are outstanding. So every figure here is **one instance, seed 42** — the
-> error bars are coming rather than missing, and the one noise floor that has been measured is
-> quoted where it matters.
+> **Status: steps 1–8 of 9 are built.** Both stages solve end to end on one seed
+> (`make run`), step 7's ablation is reported below, and step 8 has measured the hand-written GA
+> against an OR-Tools reference on a matched per-hub budget: **the reference wins by 2.9% per
+> drop**, and that margin is a floor rather than an estimate. **Step 9** (multi-seed evaluation with
+> per-seed spreads) is outstanding. So every figure here is **one instance, seed 42** — the error
+> bars are coming rather than missing, and the one noise floor that has been measured is quoted
+> where it matters.
 
 ---
 
@@ -67,6 +68,55 @@ Also measured, both single-instance:
 Step 7's full working — predictions registered before the run, both replications, the noise
 probe — is in [`docs/step7-ablation.md`](docs/step7-ablation.md).
 
+### How good is the hand-written GA? 2.9% off OR-Tools, measured
+
+The point of step 8. `make run ARGS="--reference"` re-solves the *same* final-mile problem with an
+OR-Tools `RoutingModel` and reports the gap. Same instance, same matrices, same inbound plan, same
+customer-to-hub mapping, same no-split rule, both columns scored by the same `evaluate_solution()`,
+and **each hub given exactly the wall clock its own GA search spent** — median 237 s, range
+10–1,389 s. The GA was not tuned against this figure; the gap is the result.
+
+| seed 42, nearest, local search on | greedy | GA | OR-Tools reference |
+|---|---|---|---|
+| **cost per drop ₹** | 309.01 | 264.63 | **257.02** |
+| **vs greedy** | — | −14.4% | **−16.8%** |
+| stage 2 final mile ₹ | 177,897 | 145,443 | **139,354** |
+| distance km | 9,988.4 | 8,889.8 | 8,346.1 |
+| vehicle-days | 96 | 96 | 96 |
+| window violations | 68 | 9 | 3 |
+| lateness h | 94.5 | 1.6 | 1.1 |
+
+**The reference is ahead by ₹7.61 per drop, −2.9% on the total and −4.2% on the final-mile leg.**
+The ₹6,089 decomposes as variable ₹4,893 (80.4%), driver ₹1,056 (17.3%), lateness ₹140 (2.3%),
+fixed ₹0 — and the four sum to the leg delta exactly. Vehicle-days are identical because both
+solvers sit at the per-hub mass floor, so **none** of the gap is fleet sizing: it is 544 km of
+shorter routing and the driver time that comes with it.
+
+**Read −2.9% as a floor on OR-Tools' advantage, not an estimate of it.** Three things bias the
+comparison and all three run *against* the reference:
+
+1. **It optimises a static traffic proxy.** A `RoutingModel` fixes arc costs before searching, so
+   the reference chooses tours under a dispatch-hour-constant multiplier and a static arrival
+   timeline, then gets scored under the cumulative band-blended model every other figure here uses.
+   It is optimising a slightly wrong objective and still wins.
+2. **It under-prices lateness by 0.64%.** Soft cumul bounds take an integer coefficient, so ₹250/h
+   becomes 69 milli-INR/s against an exact 69.44. It still cut violations from 9 to 3.
+3. **13 of its 16 hubs were stopped by the clock**, having spent the matched budget to the tenth of
+   a second; only three finished inside it. More time would likely widen the gap, not close it.
+
+**So what is the hand-written GA for?** Not for beating OR-Tools — it does not, and limitation 11
+says so without hedging. What step 8 establishes is that the architecture in `src/stage2/` lands
+within 2.9% of a mature constraint solver on the same problem and the same budget, while beating the
+greedy control by 14.4%. That architecture — a chromosome with no vehicle boundaries, an exact
+`split()` deriving them by shortest path, no repair operator anywhere in the codebase, capacity made
+structural rather than penalised, an adaptive window penalty, a memetic 2-opt — is the thing this
+repository exists to show, and it is now measured against something rather than asserted. The 2.9%
+is the price of the demonstration, reported rather than tuned away.
+
+The run prints its own caveats: per-hub solver status, which hubs the clock stopped, and a `WARNING`
+if `--deterministic` capped the reference at its first solution, in which case the table is not a
+measurement at all.
+
 ---
 
 ## The instance
@@ -116,10 +166,11 @@ and it is where a solver's design decisions are visible. Writing it by hand mean
 operators, the penalty schedule and the local search are all inspectable and all argued for in the
 module docstrings. Calling `RoutingModel` again would have hidden exactly the thing worth showing.
 
-**Which is why step 8 measures the gap rather than asserting there isn't one.** Step 8 adds an
-OR-Tools reference solve of the *same* Stage 2 problem, behind a `--reference` flag, outside the
-pipeline. The deliverable is the measured gap between the hand-written GA and a mature solver on
-identical input, whatever that gap turns out to be. The GA is not tuned to beat it.
+**Which is why step 8 measured the gap rather than asserting there wasn't one.** `--reference`
+re-solves the *same* Stage 2 problem with OR-Tools, outside the pipeline — a test walks the import
+closure to prove the solve path cannot reach it. The answer: **the reference is 2.9% per drop
+cheaper**, and the margin is a floor because every proxy in the comparison handicaps it. That is
+reported above and as limitation 11, and the GA was not tuned afterwards to narrow it.
 
 ### Repository layout
 
@@ -401,10 +452,15 @@ Stated plainly, and not softened anywhere else in the repository:
    what would generalise it.
 
 8. **OR-Tools optimises a static arc cost.** A `RoutingModel` fixes arc costs before the search
-   begins, so the cumulative traffic model cannot live inside it; Stage 1's arc cost uses the
+   begins, so the cumulative traffic model cannot live inside it; the arc cost uses the
    dispatch-hour multiplier as a stand-in. Every *reported* distance, duration and arrival time
    still comes from the cumulative band-blended model in `src/tour.py`. The proxy affects which
    tour is chosen, never what that tour is then said to cost.
+
+   This applies to **both** OR-Tools models, Stage 1's CVRP and Stage 2's reference, since they
+   share `src/arc_model.py`. For the reference it also covers the arrival timeline its time
+   dimension carries, so its delivery windows are judged against a static day and scored against a
+   cumulative one. Limitation 11 gives the direction that biases the measured gap in.
 
 9. **The GA stops early on some hubs against a distorted objective — localised, not solved.** On
    seed 42 every hub ends on `stagnation_limit = 75` rather than on `generations = 600`, between 76
@@ -477,6 +533,48 @@ Stated plainly, and not softened anywhere else in the repository:
     multi-seed run varies the instance and the GA draw together and cannot separate them. On seed 42
     the GA draw alone spans ₹2.34 per drop on the nearest arm, against effects of ₹4.6–7.7. Report a
     per-seed spread, not a mean.
+
+    It applies to the step 8 reference too, which is the same metaheuristic under the same kind of
+    limit. The reference column is a point estimate and a second run of seed 42 will not reproduce
+    it exactly.
+
+11. **The hand-written GA loses to OR-Tools by 2.9% per drop, and that is the reported result.**
+    Step 8's measurement, not a caveat on it: on seed 42 at a matched per-hub budget the reference
+    reaches ₹257.02 per drop against the GA's ₹264.63. The full table and the component
+    decomposition are above. The GA was not tuned afterwards to narrow the gap — that is forbidden
+    by design, because the measured gap is the deliverable.
+
+    **The margin is a floor, not an estimate.** Every proxy in the comparison handicaps the
+    reference: it optimises a static traffic model and a static arrival timeline (limitation 8), its
+    lateness coefficient is rounded 0.64% low by the integer soft-bound API, and 13 of its 16 hubs
+    were stopped by the clock having spent the matched budget to the tenth of a second. A longer
+    budget or a truer objective would be expected to widen the gap.
+
+    **What it means is a claim about architecture, not about the number.** The GA reaches within
+    2.9% of a mature constraint solver on the same problem and the same budget, and beats the greedy
+    control by 14.4%. Nothing here argues it should be preferred to `RoutingModel` for this problem;
+    what it demonstrates is that the design in `src/stage2/` — delimiter-free chromosome, exact
+    `split()`, no repair operator, structural capacity, adaptive window penalty, memetic 2-opt —
+    is sound and inspectable, and now has a number attached to how sound.
+
+12. **The reference's no-plan handling is correct; the observation that prompted it was not.** If a
+    hub's matched budget buys no plan, the run reports it — status printed, hub named, no cost per
+    drop for the whole comparison, nothing substituted for the missing tours. That stands: a matched
+    budget genuinely can be too short, and every alternative (a retry outside the budget, a greedy
+    fill-in, dropping the hub) reports a figure for a solve that did not happen, with the dropped
+    hubs being the hard ones.
+
+    But it was motivated by a one-stop hub returning no plan on a 3.5 ms budget, recorded at the
+    time as budget scarcity. It was a bug: the time dimension's horizon bounded the rounded *sum* of
+    arc transits instead of the sum of *rounded* transits, and the individually-rounded arcs
+    exceeded it by one second — so a hub any single vehicle could serve was proved infeasible by its
+    own horizon. Fixed, and that hub now solves in 3.6 ms. On seed 42 the branch never fires.
+
+    Kept in the README because the conflation is self-serving in a specific way: a modelling bug
+    that presents as "the search ran out of time" is a bug that gets written up as a finding about
+    search budgets. Two sibling traps are recorded in `CLAUDE.md` §8.11 — `ROUTING_FAIL` meaning
+    "not found" rather than "infeasible", and `ROUTING_SUCCESS` meaning "holds a local optimum"
+    rather than "converged".
 
 ---
 

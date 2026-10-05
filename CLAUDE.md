@@ -203,8 +203,14 @@ options and exits before Python sees it, so `make run --strategy balanced` fails
 
 ```bash
 make run ARGS="--strategy balanced"
+make run ARGS="--reference"            # step 8: the GA against OR-Tools, matched budget per hub
 make ablation ARGS="--probe-arm balanced"
 ```
+
+`--reference` is a measurement, so it must not be combined with `--deterministic`: that caps the
+reference at `solution_limit=1`, which stops it at its first-solution heuristic and spends almost
+none of the matched budget. The run prints a `WARNING` when it happens, because the resulting table
+looks like a measurement and is not one.
 
 ---
 
@@ -240,7 +246,7 @@ A step is complete only when all of the following hold:
 - [x] 5 — split procedure + property tests
 - [x] 6 — Stage 2 GA: OX, or-opt, adaptive penalty, memetic 2-opt
 - [x] 7 — ablation: with vs without local search × nearest/balanced, on total cost per drop
-- [ ] 8 — OR-Tools reference solve
+- [x] 8 — OR-Tools reference solve
 - [ ] 9 — multi-seed evaluation, notebook, README
 
 ---
@@ -355,6 +361,105 @@ Stated plainly in the README. Do not soften or omit them.
    `RoutingModel` fixes arc costs before searching. The cumulative band-blended model still
    produces every reported figure, via `src/tour.py`. The proxy affects which tour is chosen, not
    what it is then said to cost.
+
+   This applies to **both** OR-Tools models — Stage 1's CVRP and Stage 2's reference — since they
+   share `src/arc_model.py`. For the reference it extends to the arrival timeline the time
+   dimension carries, so its windows are judged on a static day and scored on a cumulative one.
+   See §8.10 for the direction that biases the result in.
+
+10. **The OR-Tools reference beats the hand-written GA by 2.9% per drop on seed 42, and the margin
+    is a lower bound.** Step 8's deliverable. Matched per-hub wall clock, same instance, same
+    matrices, same inbound plan, same customer-to-hub mapping, same `require_servable()` rule, both
+    columns scored by `evaluate_solution()`:
+
+    | seed 42, nearest, local search on | greedy | GA | OR-Tools |
+    |---|---|---|---|
+    | cost per drop ₹ | 309.01 | 264.63 | **257.02** |
+    | vs greedy | — | −14.4% | **−16.8%** |
+    | final mile ₹ | — | 145,443 | **139,354** (−4.2%) |
+    | distance km | 9,988.4 | 8,889.8 | **8,346.1** (−6.1%) |
+    | duration h | 396.7 | 371.4 | 360.3 (−3.0%) |
+    | vehicle-days | 96 | 96 | 96 (±0) |
+    | window violations | 68 | 9 | 3 |
+    | lateness h | 94.5 | 1.6 | 1.1 |
+
+    **Where the ₹6,089 comes from**, read off the run's own component rows rather than derived:
+
+    | component | GA | OR-Tools | delta | share of gap |
+    |---|---|---|---|---|
+    | variable ₹9/km | 80,008 | 75,115 | **−4,893** | 80.4% |
+    | driver ₹95/h | 35,286 | 34,230 | −1,056 | 17.3% |
+    | fixed ₹1,000/veh | 96,000 | 96,000 | 0 | 0.0% |
+    | late ₹250/h | 410 | 270 | −140 | 2.3% |
+
+    The four sum to the ₹6,089 final-mile delta exactly. **No part of the gap is fleet sizing** —
+    vehicle-days are identical at 96 because both solvers sit at the per-hub mass floor — so this is
+    routing quality throughout. It is mostly distance (544 km, four fifths of the gap) with the
+    driver time that distance drags along behind it (a sixth), and the window penalty is a rounding
+    error on the total at 2.3%. Worth noting anyway: the reference more than halved violations, 9 to
+    3, while *under-pricing* lateness in its own objective — the next point.
+
+    **Three things bias this measurement, all of them against the reference.** That is why −2.9% is
+    a floor on OR-Tools' advantage rather than an estimate of it, and it is part of the result
+    rather than a footnote to it:
+
+    - **Static traffic** (§8.7). The reference chooses tours under a dispatch-hour-constant arc
+      cost and a static arrival timeline, then gets scored under the cumulative band-blended model.
+      It is optimising a slightly wrong objective and still wins.
+    - **Rounded lateness coefficient.** `SetCumulVarSoftUpperBound` takes an integer, so ₹250/hour
+      becomes 69 milli-INR/s where the exact figure is 69.44 — the proxy under-prices lateness by
+      0.64%. It cut violations from 9 to 3 anyway.
+    - **13 of 16 hubs were stopped by the clock**, having spent their matched budget to the tenth of
+      a second. Only hubs 0, 9 and 10 finished inside it. So the reference's column is itself a
+      lower bound on what it reaches given longer.
+
+    **What the GA's 2.9% deficit does and does not mean.** It does not mean the hand-written solver
+    is redundant: that is the wrong question, and §1.1 forbids tuning it to close the gap. What step
+    8 establishes is that a from-scratch GA — route-first/cluster-second encoding with an exact
+    split, no repair operator anywhere, capacity structural rather than penalised, an adaptive
+    window penalty, a memetic 2-opt — lands within 2.9% of a mature constraint solver on the same
+    budget and the same problem, and beats the greedy control by 14.4% doing it. The architecture is
+    the deliverable and it is now demonstrated against something, rather than asserted. The 2.9% is
+    the price of that demonstration, stated.
+
+    **Budget, and what "matched" bought.** Per-hub median 237.3 s, range 10.1–1,388.6 s, set by each
+    hub's own GA search; the reference consumed 5,354 s of the 5,875 s the GA spent. Matched
+    *per hub* rather than in aggregate, because the hubs are independent contests and the 1,410 s
+    headline is a makespan set by hub 0 — one aggregate figure would have handed an 8-stop hub two
+    orders of magnitude more search than the GA gave it. This is matched-budget, **not**
+    matched-to-convergence: the GA stopped itself on `stagnation_limit` (median 97 generations of
+    600) and the reference was given what the GA *spent*, not what it was *offered*.
+
+    All 16 hubs returned `ROUTING_SUCCESS`, none hit its fleet ceiling, and the §8.11 no-plan branch
+    never fired. Single instance, single GA seed, and the reference is not reproducible (§9) — so
+    this is one point estimate, which is step 9's problem.
+
+11. **The reference's no-plan branch is right, but the evidence that motivated it was not.** A hub
+    whose matched budget buys no plan is reported — `orders=None`, the solver status printed, no
+    cost per drop for the whole run, and nothing substituted for the missing tours. That behaviour
+    is correct and stays: a matched budget genuinely can be too short, and the alternatives (a retry
+    outside the budget, a greedy fill-in, silently dropping the hub) all put a figure in the table
+    for a solve that did not happen, with the dropped hubs being the hard ones.
+
+    **But it was built partly on a misreading.** During implementation a one-stop hub came back with
+    no plan on a 3.5 ms budget, and that was recorded as a budget-scarcity finding. It was not: the
+    time dimension's horizon bounded the *rounded sum* of arc transits rather than the *sum of
+    rounded* transits, and individually-rounded arcs exceeded it by one second — so a hub any single
+    vehicle could serve was proved `ROUTING_INFEASIBLE` by its own horizon. With the horizon fixed
+    to `(k+1)` arcs at `ceil(longest leg) + ceil(service)`, that hub solves in 3.6 ms, and on seed 42
+    the branch never fires at all.
+
+    Recorded because the two are easy to conflate and the conflation is self-serving: a modelling
+    bug that presents as "the budget was too short" is a bug that gets written up as a finding.
+    `ROUTING_FAIL` is the same trap — it means "no solution found", not "infeasible", and at
+    millisecond budgets the same task returns `ROUTING_FAIL` or `ROUTING_FAIL_TIMEOUT`
+    nondeterministically. Only `ROUTING_INFEASIBLE` and `ROUTING_INVALID` raise.
+
+    A third instance of the same family: `ROUTING_SUCCESS` on every hub while 13 of 16 had spent
+    their whole budget. It means "holds a local optimum", not "finished", so keying the truncation
+    caveat on the status alone left it silent on the run that needed it. `HubReference.clock_stopped`
+    measures it from the clock instead. Same rule as §8.6: a truncation claim comes from what the
+    run measured, never from what a status name suggests.
 
 8. **Stage 1's guided local search is not bit-reproducible, but does not propagate.** It returns
    whatever it reached when the clock ran out; `--deterministic` stops at the first-solution
