@@ -89,8 +89,9 @@ and **each hub given exactly the wall clock its own GA search spent** — median
 **The reference is ahead by ₹7.61 per drop, −2.9% on the total and −4.2% on the final-mile leg.**
 The ₹6,089 decomposes as variable ₹4,893 (80.4%), driver ₹1,056 (17.3%), lateness ₹140 (2.3%),
 fixed ₹0 — and the four sum to the leg delta exactly. Vehicle-days are identical because both
-solvers sit at the per-hub mass floor, so **none** of the gap is fleet sizing: it is 544 km of
-shorter routing and the driver time that comes with it.
+solvers sit at the per-hub mass floor, so **none** of the gap is fleet sizing. It is 544 km of
+shorter routing and the driver time that comes with it, 97.7% between them, with the window penalty
+the small remainder.
 
 **Read −2.9% as a floor on OR-Tools' advantage, not an estimate of it.** Three things bias the
 comparison and all three run *against* the reference:
